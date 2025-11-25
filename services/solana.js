@@ -1,5 +1,4 @@
 // backend/services/solana.js
-const bs58 = require('bs58');
 const {
   Connection,
   Keypair,
@@ -46,14 +45,14 @@ async function getTokens(pubkey) {
   });
 }
 
-async function withdrawSol(ciphertext, iv, passphrase, to, amountLamports) {
-  const secret = await decryptSecret(ciphertext, iv, passphrase);
+async function withdrawSol(ciphertext, iv, passphrase, salt, to, amountLamports) {
+  const secret = await decryptSecret(ciphertext, iv, passphrase, salt);
   const kp = keypairFromSecret(secret);
 
-  // Basic balance check
   const balance = BigInt(await getBalance(kp.publicKey.toBase58()));
   const amount = BigInt(amountLamports);
   const estimatedFee = 5000n;
+
   if (balance < amount + estimatedFee) throw new Error('insufficient funds');
 
   const tx = new Transaction().add(
@@ -68,8 +67,8 @@ async function withdrawSol(ciphertext, iv, passphrase, to, amountLamports) {
   return sig;
 }
 
-async function sendSpl(ciphertext, iv, passphrase, to, mint, amountBaseUnits) {
-  const secret = await decryptSecret(ciphertext, iv, passphrase);
+async function sendSpl(ciphertext, iv, passphrase, salt, to, mint, amountBaseUnits) {
+  const secret = await decryptSecret(ciphertext, iv, passphrase, salt);
   const kp = keypairFromSecret(secret);
   const owner = kp.publicKey;
   const mintPub = new PublicKey(mint);
@@ -82,7 +81,12 @@ async function sendSpl(ciphertext, iv, passphrase, to, mint, amountBaseUnits) {
   const toInfo = await connection.getAccountInfo(toAta);
   if (!toInfo) {
     const ataRent = await connection.getMinimumBalanceForRentExemption(165);
-    // Caller should ensure user has SOL to cover ataRent + fees (we could check here)
+    // Throw if owner has insufficient SOL to cover ata rent + fee
+    const ownerSol = BigInt(await getBalance(owner.toBase58()));
+    const conservativeFee = 5000n;
+    if (ownerSol < ataRent + conservativeFee) {
+      throw new Error('owner has insufficient SOL to create recipient ATA (rent + fee)');
+    }
     instructions.push(createAssociatedTokenAccountInstruction(owner, toAta, recipient, mintPub));
   }
 

@@ -1,24 +1,26 @@
-require('dotenv').config();
-const express = require('express');
-const rateLimit = require('express-rate-limit');
-const { pool } = require('./db'); // ensure DB exists
-const userRoutes = require('./routes/user');
-const activityRoutes = require('./routes/activity');
-
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
 const app = express();
-app.use(express.json());
-app.use(rateLimit({ windowMs: 60*1000, max: 200 }));
 
-app.get('/health', (req,res) => res.json({ ok: true }));
+app.use(cors());
+app.use(express.json());   // <-- OBRIGATÓRIO
+app.use(express.urlencoded({ extended: true })); // opcional
 
-app.use('/user', userRoutes);
-app.use('/activity', activityRoutes);
+// rotate
+const userRoutes = require("./routes/user");
+const activityRoutes = require("./routes/activity");
+const withdrawRoutes = require("./routes/withdraw");
 
-const PORT = process.env.PORT || 3001;
+// mount
+app.use("/user", userRoutes);
+app.use("/activity", activityRoutes);
+app.use("/withdraw", withdrawRoutes);   // <-- AQUI
 
-// optional: run migrations at startup if env RUN_MIGRATIONS=true
-if (process.env.RUN_MIGRATIONS === 'true') {
-  console.log('RUN_MIGRATIONS=true -> run migrations via npm run migrate before start');
-}
+// start
+app.listen(process.env.PORT || 3001, () => {
+  console.log("Server listening on", process.env.PORT || 3001);
+});
 
-app.listen(PORT, ()=> console.log('Server listening on', PORT));
+const { start: startDepositTracker } = require("./services/depositTracker");
+startDepositTracker();

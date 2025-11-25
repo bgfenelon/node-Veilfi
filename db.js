@@ -7,7 +7,6 @@ if (!connectionString) {
   process.exit(1);
 }
 
-// For Render / Railway the connection string contains everything (user:pass@host:port/db)
 const pool = new Pool({
   connectionString,
   ssl: process.env.DB_SSL === 'false' ? false : { rejectUnauthorized: false }

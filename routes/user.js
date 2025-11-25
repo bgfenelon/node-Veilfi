@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const bs58 = require('bs58');
-const { query } = require('../db'); // db.query(text, params)
+const { query } = require('../db');
 const { encryptSecret } = require('../services/crypto');
 const { getBalance, getTokens, withdrawSol, sendSpl } = require('../services/solana');
 
@@ -14,12 +14,10 @@ router.post('/create', async (req, res) => {
     const kp = require('@solana/web3.js').Keypair.generate();
     const enc = await encryptSecret(kp.secretKey, passphrase);
 
-    const insert = `
-      INSERT INTO users (id, pubkey, ciphertext, iv, salt)
-      VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (id) DO NOTHING
-    `;
-    await query(insert, [userId, kp.publicKey.toBase58(), enc.ciphertext, enc.iv, enc.salt]);
+    await query(
+      `INSERT INTO users (id, pubkey, ciphertext, iv, salt) VALUES ($1,$2,$3,$4,$5)`,
+      [userId, kp.publicKey.toBase58(), enc.ciphertext, enc.iv, enc.salt]
+    );
 
     res.json({ pubkey: kp.publicKey.toBase58() });
   } catch (e) {
@@ -38,7 +36,7 @@ router.post('/import', async (req, res) => {
     const kp = require('@solana/web3.js').Keypair.fromSecretKey(secret);
 
     await query(
-      `INSERT INTO users (id, pubkey, ciphertext, iv, salt) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO NOTHING`,
+      `INSERT INTO users (id, pubkey, ciphertext, iv, salt) VALUES ($1,$2,$3,$4,$5)`,
       [userId, kp.publicKey.toBase58(), enc.ciphertext, enc.iv, enc.salt]
     );
 
@@ -52,7 +50,7 @@ router.post('/import', async (req, res) => {
 router.post('/balance', async (req, res) => {
   try {
     const { userId } = req.body;
-    if (!userId) return res.status(400).json({ error: 'missing userId' });
+    if (!userId) return res.status(400).json({ error: 'missing fields' });
 
     const r = await query(`SELECT pubkey FROM users WHERE id=$1`, [userId]);
     if (r.rowCount === 0) return res.status(404).json({ error: 'user not found' });
@@ -74,10 +72,9 @@ router.post('/withdraw/sol', async (req, res) => {
 
     const r = await query(`SELECT ciphertext, iv, salt FROM users WHERE id=$1`, [userId]);
     if (r.rowCount === 0) return res.status(404).json({ error: 'user not found' });
-
     const { ciphertext, iv, salt } = r.rows[0];
 
-    const sig = await withdrawSol(ciphertext, iv, passphrase, to, amountLamports);
+    const sig = await withdrawSol(ciphertext, iv, passphrase, salt, to, amountLamports);
 
     await query(
       `INSERT INTO activities (user_id, type, token, amount, signature, metadata) VALUES ($1,$2,$3,$4,$5,$6)`,
@@ -98,11 +95,9 @@ router.post('/withdraw/spl', async (req, res) => {
 
     const r = await query(`SELECT ciphertext, iv, salt FROM users WHERE id=$1`, [userId]);
     if (r.rowCount === 0) return res.status(404).json({ error: 'user not found' });
-
     const { ciphertext, iv, salt } = r.rows[0];
 
-    // optionally: check recipient ATA rent and user's SOL balance before calling sendSpl
-    const sig = await sendSpl(ciphertext, iv, passphrase, to, mint, amountBaseUnits);
+    const sig = await sendSpl(ciphertext, iv, passphrase, salt, to, mint, amountBaseUnits);
 
     await query(
       `INSERT INTO activities (user_id, type, token, amount, signature, metadata) VALUES ($1,$2,$3,$4,$5,$6)`,

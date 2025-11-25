@@ -1,67 +1,94 @@
-// 📁 DEV/services/depositTracker.js
-// Observa e detecta depósitos na wallet da empresa (mainnet)
+// backend/services/depositTracker.js
+// Polling deposit tracker per-user (simple, reliable for MVP).
 
-import dotenv from "dotenv";
-dotenv.config();
+const { connection } = require('./solana');
+const { query } = require('../db');
+const { PublicKey } = require('@solana/web3.js'); // <-- IMPORTANTE
 
-import {
-  Connection,
-  PublicKey
-} from "@solana/web3.js";
+const POLL_INTERVAL_MS = Number(process.env.DEPOSIT_POLL_INTERVAL_MS || 15000);
 
-const RPC_URL = process.env.RPC_URL;
-const connection = new Connection(RPC_URL, "confirmed");
-
-let lastCheckedSignatures = new Set(); // evita dupla contagem
-
-export async function checkDeposits() {
+async function getTrackedSignaturesForAddress(pubkey) {
   try {
-    const walletPubkey = new PublicKey(process.env.PUBLIC_KEY);
-
-    // Fetch últimas 20 transações
-    const signatures = await connection.getSignaturesForAddress(walletPubkey, {
-      limit: 20
-    });
-
-    let newDeposits = [];
-
-    for (const sig of signatures) {
-      if (lastCheckedSignatures.has(sig.signature)) {
-        continue; // já processada
-      }
-
-      lastCheckedSignatures.add(sig.signature);
-
-      // Obtém detalhes da transação
-      const tx = await connection.getTransaction(sig.signature, {
-        maxSupportedTransactionVersion: 0
-      });
-
-      if (!tx) continue;
-
-      // Quantidade recebida em SOL?
-      const pre = tx.meta?.preBalances;
-      const post = tx.meta?.postBalances;
-
-      if (!pre || !post) continue;
-
-      // se postBalance > preBalance → depósito de SOL
-      const diff = post[0] - pre[0];
-
-      if (diff > 0) {
-        newDeposits.push({
-          signature: sig.signature,
-          amountLamports: diff,
-          amountSol: diff / 1e9,
-          timestamp: sig.blockTime,
-          explorer: `https://explorer.solana.com/tx/${sig.signature}?cluster=mainnet`
-        });
-      }
-    }
-
-    return newDeposits;
-  } catch (err) {
-    console.error("Deposit tracker error:", err);
+    const sigs = await connection.getSignaturesForAddress(pubkey, { limit: 20 });
+    return sigs || [];
+  } catch (e) {
+    console.error(
+      'Error fetching signatures for',
+      pubkey.toBase58?.() || pubkey,
+      e.message || e
+    );
     return [];
   }
 }
+
+async function signatureExists(signature) {
+  const r = await query('SELECT 1 FROM activities WHERE signature=$1 LIMIT 1', [signature]);
+  return r.rowCount > 0;
+}
+
+async function insertDepositActivity(userId, signature, amountLamports, slot, txInfo) {
+  await query(
+    `INSERT INTO activities (user_id, type, token, amount, signature, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [userId, 'deposit', 'SOL', amountLamports, signature, JSON.stringify({ slot, txInfo })]
+  );
+}
+
+async function handleSignatureForUser(user) {
+  const pub = new PublicKey(user.pubkey); // <-- CORREÇÃO
+
+  const sigs = await getTrackedSignaturesForAddress(pub);
+
+  for (const s of sigs) {
+    const sig = s.signature;
+
+    const exists = await signatureExists(sig);
+    if (exists) continue;
+
+    try {
+      const tx = await connection.getTransaction(sig, { commitment: 'confirmed' });
+      if (!tx || !tx.meta) continue;
+
+      const accounts = tx.transaction.message.accountKeys.map(k => k.toBase58());
+      const idx = accounts.indexOf(pub.toBase58()); // <-- usa pub.toBase58()
+
+      if (idx === -1) continue;
+
+      const preBalances = tx.meta.preBalances || [];
+      const postBalances = tx.meta.postBalances || [];
+
+      const delta = (postBalances[idx] || 0) - (preBalances[idx] || 0);
+
+      if (delta > 0) {
+        await insertDepositActivity(user.id, sig, delta, tx.slot, { blockTime: tx.blockTime });
+        console.log(`Detected deposit for user ${user.id} ${delta} lamports sig ${sig}`);
+      }
+    } catch (e) {
+      console.error('Error processing tx', sig, e.message || e);
+    }
+  }
+}
+
+let running = false;
+async function start() {
+  if (running) return;
+  running = true;
+  console.log('Starting deposit tracker (polling) every', POLL_INTERVAL_MS, 'ms');
+
+  setInterval(async () => {
+    try {
+      const res = await query('SELECT id, pubkey FROM users');
+      for (const row of res.rows) {
+        try {
+          await handleSignatureForUser(row);
+        } catch (err) {
+          console.error('Error handling user', row.id, err.message || err);
+        }
+      }
+    } catch (e) {
+      console.error('Deposit tracker top-level error', e.message || e);
+    }
+  }, POLL_INTERVAL_MS);
+}
+
+module.exports = { start };

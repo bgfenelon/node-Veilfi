@@ -1,32 +1,53 @@
-// backend/services/crypto.js
-const { webcrypto } = require('crypto');
+const crypto = require("crypto");
 
-const encoder = new TextEncoder();
+// Derive AES key from passphrase + salt
+function deriveKey(passphrase, salt) {
+  return crypto.pbkdf2Sync(passphrase, salt, 100000, 32, "sha256");
+}
 
-async function deriveKey(passphrase, salt = 'veilfi-user-salt') {
-  const keyMaterial = await webcrypto.subtle.importKey('raw', encoder.encode(passphrase), 'PBKDF2', false, ['deriveKey']);
-  return webcrypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt: encoder.encode(salt), iterations: 100000, hash: 'SHA-256' },
-    keyMaterial,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt']
+// Encrypt private key
+function encryptPrivateKey(secretKey, passphrase) {
+  const iv = crypto.randomBytes(16);
+  const salt = crypto.randomBytes(16);
+  const key = deriveKey(passphrase, salt);
+
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([
+    cipher.update(Buffer.from(secretKey)),
+    cipher.final(),
+  ]);
+
+  const tag = cipher.getAuthTag();
+
+  return {
+    ciphertext: encrypted.toString("base64"),
+    iv: iv.toString("base64"),
+    salt: salt.toString("base64"),
+    tag: tag.toString("base64"),
+  };
+}
+
+// Decrypt private key
+function decryptPrivateKey(ciphertext, passphrase, salt, iv, tag) {
+  const key = deriveKey(passphrase, Buffer.from(salt, "base64"));
+
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    key,
+    Buffer.from(iv, "base64")
   );
+
+  decipher.setAuthTag(Buffer.from(tag, "base64"));
+
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(ciphertext, "base64")),
+    decipher.final(),
+  ]);
+
+  return decrypted;
 }
 
-async function encryptSecret(secretUint8, passphrase, salt = 'veilfi-user-salt') {
-  const key = await deriveKey(passphrase, salt);
-  const iv = webcrypto.getRandomValues(new Uint8Array(12));
-  const ct = await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, secretUint8);
-  return { ciphertext: Buffer.from(ct).toString('base64'), iv: Buffer.from(iv).toString('base64'), salt };
-}
-
-async function decryptSecret(ciphertext_b64, iv_b64, passphrase, salt = 'veilfi-user-salt') {
-  const key = await deriveKey(passphrase, salt);
-  const ct = Buffer.from(ciphertext_b64, 'base64');
-  const iv = Buffer.from(iv_b64, 'base64');
-  const pt = await webcrypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
-  return new Uint8Array(pt);
-}
-
-module.exports = { encryptSecret, decryptSecret };
+module.exports = {
+  encryptPrivateKey,
+  decryptPrivateKey,
+};
