@@ -1,7 +1,12 @@
 require("dotenv").config();
+console.log("SUPPORTED_MINTS:", process.env.SUPPORTED_MINTS);
+const tokenRoutes = require("./tokens");
+
+
 const express = require("express");
 const cors = require("cors");
 const app = express();
+app.use("/api/tokens", tokenRoutes);
 
 app.use(cors());
 app.use(express.json());   // <-- OBRIGATÓRIO
