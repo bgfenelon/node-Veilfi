@@ -1,25 +1,21 @@
-// sessions.js
-const sessions = {};
+const sessions = new Map();
 
-function createSession(sessionId, walletPubkey, secretKey) {
-  sessions[sessionId] = {
+export function createSession(walletPubkey, res) {
+  const sid = Math.random().toString(36).slice(2);
+  sessions.set(sid, {
     walletPubkey,
-    secretKey,        // <- ESSENCIAL
-    createdAt: Date.now(),
-  };
+    secretKey: null,
+  });
+
+  res.cookie("sid", sid, {
+    httpOnly: true,
+    sameSite: "lax"
+  });
+
+  return sid;
 }
 
-function getSession(id) {
-  return sessions[id];
+export function getSession(req) {
+  const sid = req.cookies?.sid;
+  return sid && sessions.has(sid) ? sessions.get(sid) : null;
 }
-
-function destroySession(id) {
-  delete sessions[id];
-}
-
-module.exports = {
-  createSession,
-  getSession,
-  destroySession,
-  sessions,
-};
