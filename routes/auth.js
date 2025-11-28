@@ -5,60 +5,55 @@ const bs58 = require("bs58");
 const bip39 = require("bip39");
 const { derivePath } = require("ed25519-hd-key");
 
-// Importar carteira via seed phrase
+// Importar wallet via SEED ou PRIVATE KEY
 router.post("/import", async (req, res) => {
   try {
-    const { mnemonic } = req.body;
+    const { input } = req.body;
 
-    if (!mnemonic) {
-      return res.status(400).json({ ok: false, message: "Mnemonic obrigatório" });
+    if (!input) return res.status(400).json({ ok: false, message: "Input obrigatório" });
+
+    let keypair;
+
+    // SE FOR SEED PHRASE
+    if (input.trim().split(" ").length >= 12) {
+      const seed = await bip39.mnemonicToSeed(input);
+      const derived = derivePath("m/44'/501'/0'/0'", Buffer.from(seed).toString("hex")).key;
+      keypair = nacl.sign.keyPair.fromSeed(derived);
     }
 
-    const valid = bip39.validateMnemonic(mnemonic);
-    if (!valid) {
-      return res.status(400).json({ ok: false, message: "Mnemonic inválido" });
+    // SE FOR PRIVATE KEY (ARRAY)
+    else if (/^\[.*\]$/.test(input.trim())) {
+      const arr = JSON.parse(input);
+      keypair = nacl.sign.keyPair.fromSecretKey(Uint8Array.from(arr));
     }
 
-    const seed = await bip39.mnemonicToSeed(mnemonic.trim());
-    const path = "m/44'/501'/0'/0'";
-    const derived = derivePath(path, seed.toString("hex")).key;
-    const keypair = nacl.sign.keyPair.fromSeed(derived);
+    // SE FOR PRIVATE KEY BASE58
+    else {
+      const decoded = bs58.decode(input);
+      keypair = nacl.sign.keyPair.fromSecretKey(decoded);
+    }
 
     const walletAddress = bs58.encode(keypair.publicKey);
     const secretKey = Array.from(keypair.secretKey);
 
+    // salva sessão
     req.session.user = {
       walletPubkey: walletAddress,
-      balanceSol: 0
+      balanceSol: 0,
     };
 
     return res.json({
       ok: true,
-      walletAddress,
-      secretKey
+      publicKey: walletAddress,
+      secretKey,
     });
-
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ ok: false, message: "Erro interno" });
+    console.error("Erro import:", err);
+    return res.status(400).json({
+      ok: false,
+      message: "Chave inválida",
+    });
   }
-});
-
-// Registrar carteira manualmente
-router.post("/register", (req, res) => {
-  const { walletPubkey } = req.body;
-
-  if (!walletPubkey) {
-    return res.status(400).json({ ok: false, message: "walletPubkey obrigatório" });
-  }
-
-  req.session.user = { walletPubkey, balanceSol: 0 };
-  res.json({ ok: true });
-});
-
-// Logout
-router.post("/logout", (req, res) => {
-  req.session.destroy(() => res.json({ ok: true }));
 });
 
 module.exports = router;

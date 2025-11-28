@@ -1,23 +1,29 @@
-// backend/routes/deposit.js
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const { query } = require('../db');
+const { connection } = require("../services/solana");
 
-// GET /deposit/check?userId=...
-router.get('/check', async (req, res) => {
+router.post("/check", async (req, res) => {
   try {
-    const userId = req.query.userId;
-    if (!userId) return res.status(400).json({ error: 'missing userId' });
+    const { signature } = req.body;
 
-    const r = await query(
-      `SELECT id, type, token, amount, signature, metadata, created_at FROM activities
-       WHERE user_id=$1 AND type='deposit' ORDER BY created_at DESC LIMIT 50`,
-      [userId]
-    );
-    res.json({ deposits: r.rows });
-  } catch (e) {
-    console.error('deposit/check error', e);
-    res.status(500).json({ error: String(e) });
+    if (!signature) return res.json({ ok: false, message: "Signature obrigatório" });
+
+    const tx = await connection.getTransaction(signature, {
+      maxSupportedTransactionVersion: 0,
+    });
+
+    if (!tx) return res.json({ ok: false, message: "TX não encontrada" });
+
+    const lamports = tx.meta.postBalances[0] - tx.meta.preBalances[0];
+    const amountSol = lamports / 1e9;
+
+    return res.json({
+      ok: true,
+      amountSol,
+    });
+  } catch (err) {
+    console.error(err);
+    res.json({ ok: false });
   }
 });
 

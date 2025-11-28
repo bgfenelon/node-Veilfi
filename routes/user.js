@@ -1,38 +1,41 @@
-// server/routes/user.js
 const express = require("express");
 const router = express.Router();
 const { connection } = require("../services/solana");
 const { PublicKey } = require("@solana/web3.js");
 
-// Rota para pegar saldo SOL do usuário
 router.post("/balance", async (req, res) => {
   try {
-    const { walletPubkey } = req.body;
+    const { userPubkey } = req.body;
 
-    if (!walletPubkey) {
+    if (!userPubkey) {
       return res.status(400).json({
         ok: false,
-        message: "walletPubkey obrigatório"
+        message: "userPubkey obrigatório",
       });
     }
 
-    const pubkey = new PublicKey(walletPubkey);
+    const pubkey = new PublicKey(userPubkey);
 
-    // saldo em lamports
     const lamports = await connection.getBalance(pubkey);
-    const sol = lamports / 1e9;
+    const solBalance = lamports / 1e9;
+
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, {
+      programId: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+    });
+
+    const tokens = tokenAccounts.value.map((acc) => ({
+      mint: acc.account.data.parsed.info.mint,
+      uiAmount: acc.account.data.parsed.info.tokenAmount.uiAmount,
+    }));
 
     return res.json({
       ok: true,
-      balance: sol
+      solBalance,
+      tokens,
     });
-
   } catch (e) {
-    console.error("Erro em /user/balance:", e);
-    return res.status(500).json({
-      ok: false,
-      message: "Erro interno ao pegar saldo"
-    });
+    console.error(e);
+    return res.status(500).json({ ok: false, message: "Erro interno" });
   }
 });
 
