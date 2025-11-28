@@ -48,7 +48,7 @@ app.use((req, res, next) => {
 // ROTAS
 // ===============================
 app.use("/auth", authRoutes);     // /auth/import, /auth/login ...
-app.use("/user", userRoutes);     // /user/balance (se existir)
+app.use("/user", userRoutes);     // /user/balance (se existir) 
 app.use("/wallet", walletRoutes); // /wallet/balance + /wallet/send
 
 // ===============================
