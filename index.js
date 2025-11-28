@@ -1,20 +1,25 @@
+// index.js
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const cookieParser = require("cookie-parser");
+
+const swapBuyInit = require("./routes/swapBuyInit");
+const swapBuyConfirm = require("./routes/swapBuyConfirm");
+
 const app = express();
+
+app.use(express.json());
+app.use(cookieParser());
 
 app.use(cors({
   origin: "http://localhost:5173",
-  credentials: true
+  credentials: true,
 }));
 
-app.use(express.json());
+// Rotas oficiais de compra
+app.use("/swap", swapBuyInit);
+app.use("/swap", swapBuyConfirm);
 
-// Rotas existentes
-app.use("/auth", require("./routes/auth"));
-app.use("/session", require("./routes/session"));
-app.use("/user", require("./routes/user"));
-
-// ⬅️ ESTA É A ROTA QUE VOCÊ ACABOU DE CRIAR
-app.use("/wallet", require("./routes/wallet"));
-
-app.listen(3001, () => console.log("🔥 Backend rodando na porta 3001"));
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => console.log("Server rodando na porta " + PORT));

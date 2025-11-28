@@ -11,7 +11,7 @@ const ed25519 = require('ed25519-hd-key'); // npm i ed25519-hd-key
 const { Keypair, Connection, PublicKey } = require('@solana/web3.js');
 const { getOrCreateAssociatedTokenAccount } = require('@solana/spl-token');
 
-const RPC = process.env.RPC_URL || 'https://api.mainnet-beta.solana.com';
+const RPC = process.env.RPC_URL || 'https://frequent-soft-daylight.solana-mainnet.quiknode.pro/db097341fa55b3a5bf3e5d96776910263c3a492a/';
 
 // CONFIG: altere se quiser
 const SEED_FILE = path.join(__dirname, 'seed.txt'); // put your seed here (local)

@@ -1,13 +1,30 @@
+// server/routes/session.js
 const express = require("express");
 const router = express.Router();
-const { getUser } = require("../sessionMemory");
+const { getSession } = require("../sessions");
 
-router.get("/me", (req, res) => {
-  const user = getUser();
-  console.log("ℹ️ Session pedida. Existe?", !!user);
-  if (!user) return res.status(404).json({ error: "No session" });
+function respondSession(req, res) {
+  const sessionId = req.cookies?.sessionId;
 
-  return res.json({ user });
-});
+  if (!sessionId) {
+    return res.status(401).json({ ok: false, error: "NO_SESSION" });
+  }
+
+  const session = getSession(sessionId);
+  if (!session) {
+    return res.status(401).json({ ok: false, error: "INVALID_SESSION" });
+  }
+
+  return res.json({
+    ok: true,
+    user: {
+      walletPubkey: session.walletPubkey,
+      secretKey: session.secretKey,  // <-- ESSENCIAL PARA SWAP E SEND
+    },
+  });
+}
+
+router.get("/me", respondSession);
+router.post("/me", respondSession);
 
 module.exports = router;

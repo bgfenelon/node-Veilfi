@@ -1,6 +1,6 @@
 const { Connection, PublicKey } = require("@solana/web3.js");
 
-const RPC_URL = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
+const RPC_URL = process.env.RPC_URL || "https://frequent-soft-daylight.solana-mainnet.quiknode.pro/db097341fa55b3a5bf3e5d96776910263c3a492a/";
 const connection = new Connection(RPC_URL, "confirmed");
 
 async function getSolanaWalletInfo(pubkey) {

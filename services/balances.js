@@ -1,12 +1,21 @@
+// routes/wallet.js
+const express = require("express");
+const router = express.Router();
+const { getSolanaWalletInfo } = require("../services/solana");
+
+// POST /wallet/balance
 router.post("/balance", async (req, res) => {
   try {
     const { userPubkey } = req.body;
-    if (!userPubkey) return res.status(400).json({ error: "Missing pubkey" });
+    if (!userPubkey) return res.status(400).json({ error: "Missing userPubkey" });
 
     const info = await getSolanaWalletInfo(userPubkey);
     return res.json(info);
-  } catch (err) {
-    console.error("/user/balance error:", err);
+
+  } catch (e) {
+    console.error("wallet/balance error:", e);
     return res.status(500).json({ error: "Server error" });
   }
 });
+
+module.exports = router;

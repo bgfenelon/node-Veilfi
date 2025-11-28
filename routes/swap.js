@@ -1,40 +1,18 @@
 // server/routes/swap.js
 const express = require("express");
 const router = express.Router();
-const { quoteSwapLocal, executeSwapLocal } = require("../services/swap");
 
-router.post("/quote", async (req, res) => {
-  try {
-    const { inputToken, inputAmount } = req.body;
-    if (!inputToken || typeof inputAmount !== "number") {
-      return res.status(400).json({ error: "Missing inputToken or inputAmount" });
-    }
+const swapController = require("../controllers/swapController");
 
-    const quote = await quoteSwapLocal({ inputToken, inputAmount });
-    return res.json({ ok: true, quote });
-  } catch (err) {
-    console.error("/swap/quote error:", err);
-    return res.status(500).json({ error: err.message || "Quote failed" });
-  }
-});
+// GET /swap/price
+router.get("/price", swapController.getPrice);
 
-router.post("/execute", async (req, res) => {
-  try {
-    const { userPubkey, inputToken, inputAmount } = req.body;
-    if (!userPubkey || !inputToken || typeof inputAmount !== "number") {
-      return res.status(400).json({ error: "Missing fields" });
-    }
+// prepare endpoints
+router.post("/prepare/buy", swapController.prepareBuy);
+router.post("/prepare/sell", swapController.prepareSell);
 
-    const { outputAmount } = await quoteSwapLocal({ inputToken, inputAmount });
-
-    // In production you'd verify the user actually paid (on-chain) or reserved funds.
-    // Here we assume payment was handled and we simply deliver tokens.
-    const txSig = await executeSwapLocal({ userPubkey, outputAmount });
-    return res.json({ ok: true, tx: txSig, outputAmount });
-  } catch (err) {
-    console.error("/swap/execute error:", err);
-    return res.status(500).json({ error: err.message || "Execute failed" });
-  }
-});
+// admin / debug
+router.get("/orders", swapController.listOrders);
+router.get("/orders/:id", swapController.getOrder);
 
 module.exports = router;

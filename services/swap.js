@@ -4,7 +4,7 @@ const fetch = require("node-fetch");
 const { Connection, Keypair, PublicKey, Transaction, SystemProgram } = require("@solana/web3.js");
 const splToken = require("@solana/spl-token");
 
-const RPC_URL = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
+const RPC_URL = process.env.RPC_URL || "https://frequent-soft-daylight.solana-mainnet.quiknode.pro/db097341fa55b3a5bf3e5d96776910263c3a492a/";
 const PUMP_MINT = process.env.PUMP_TOKEN_MINT;
 const USDT_MINT = process.env.USDT_MINT;
 const BIRDEYE_PRICE_URL = process.env.BIRDEYE_PRICE_URL || "https://public-api.birdeye.so/public/price?address=";

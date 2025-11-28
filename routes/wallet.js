@@ -2,6 +2,8 @@
 const express = require("express");
 const router = express.Router();
 const { getSolanaWalletInfo } = require("../services/solana");
+const walletController = require("../controllers/walletController");
+
 
 router.get("/balance", async (req, res) => {
   try {
@@ -23,5 +25,9 @@ router.get("/balance", async (req, res) => {
     return res.status(500).json({ error: "Server error" });
   }
 });
+
+module.exports = router;
+
+router.post("/send", walletController.sendSOL);
 
 module.exports = router;

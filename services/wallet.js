@@ -9,9 +9,8 @@ router.get("/balance", async (req, res) => {
 
     const info = await getSolanaWalletInfo(address);
     return res.json(info);
-
-  } catch (e) {
-    console.error("wallet/balance error:", e);
+  } catch (err) {
+    console.error("/wallet/balance error:", err);
     return res.status(500).json({ error: "Server error" });
   }
 });
