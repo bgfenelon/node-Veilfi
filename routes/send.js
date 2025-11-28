@@ -1,96 +1,54 @@
-// server/routes/send.js
-const express = require("express");
-const router = express.Router();
-const { getSession } = require("../sessions");
+import React, { useState, useEffect } from "react";
+import { postJSON, getJSON } from "../../services/api";
 
-const {
-  Connection,
-  PublicKey,
-  Keypair,
-  SystemProgram,
-  sendAndConfirmTransaction,
-  Transaction
-} = require("@solana/web3.js");
+export default function SendPage() {
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [amount, setAmount] = useState("");
+  const [result, setResult] = useState<string | null>(null);
 
-// RPC principal
-const RPC_URL =
-  "https://frequent-soft-daylight.solana-mainnet.quiknode.pro/db097341fa55b3a5bf3e5d96776910263c3a492a/";
-
-// ========================================
-// 🚀 ROTA REAL DE ENVIO DE SOL
-// ========================================
-router.post("/send", async (req, res) => {
-  console.log("=== /wallet/send BEGIN ===");
-
-  try {
-    const sessionId = req.cookies?.sessionId;
-
-    if (!sessionId) {
-      return res.status(401).json({ ok: false, error: "NO_SESSION" });
-    }
-
-    const userSession = getSession(sessionId);
-
-    if (!userSession) {
-      return res.status(401).json({ ok: false, error: "INVALID_SESSION" });
-    }
-
-    const { walletPubkey, secretKey } = userSession;
-
-    if (!walletPubkey || !secretKey) {
-      return res.status(400).json({ ok: false, error: "SESSION_NO_KEYPAIR" });
-    }
-
-    const { to, amount } = req.body;
-
-    if (!to || typeof to !== "string") {
-      return res.status(400).json({ ok: false, error: "INVALID_DESTINATION" });
-    }
-
-    if (!amount || typeof amount !== "number" || amount <= 0) {
-      return res.status(400).json({ ok: false, error: "INVALID_AMOUNT" });
-    }
-
-    const lamports = Math.floor(amount * 1e9); // Convert SOL -> lamports
-
-    const connection = new Connection(RPC_URL, "confirmed");
-
-    const fromKeypair = Keypair.fromSecretKey(Uint8Array.from(secretKey));
-    const toPubkey = new PublicKey(to);
-
-    console.log("FROM:", fromKeypair.publicKey.toBase58());
-    console.log("TO:", toPubkey.toBase58());
-    console.log("Sending lamports:", lamports);
-
-    // Criar transação
-    const tx = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: fromKeypair.publicKey,
-        toPubkey,
-        lamports,
-      })
-    );
-
-    // Enviar
-    const signature = await sendAndConfirmTransaction(connection, tx, [
-      fromKeypair,
-    ]);
-
-    console.log("✔ TRANSACTION CONFIRMED:", signature);
-
-    return res.json({
-      ok: true,
-      signature,
-      explorer: `https://explorer.solana.com/tx/${signature}`,
+  useEffect(() => {
+    getJSON("/session/me").then((res) => {
+      if (res.ok) setFrom(res.user.walletPubkey);
     });
-  } catch (err) {
-    console.error("❌ SEND ERROR:", err);
-    return res.status(500).json({
-      ok: false,
-      error: "SEND_FAILED",
-      details: err.message,
+  }, []);
+
+  async function send() {
+    setResult(null);
+
+    const res = await postJSON("/wallet/send", {
+      to,
+      amount: Number(amount),
     });
+
+    if (!res.ok) {
+      setResult(res.error || "Erro");
+    } else {
+      setResult("Tx: " + res.signature);
+    }
   }
-});
 
-module.exports = router;
+  return (
+    <div>
+      <h1>Send</h1>
+
+      <input value={from} disabled />
+
+      <input
+        placeholder="Destination"
+        value={to}
+        onChange={(e) => setTo(e.target.value)}
+      />
+
+      <input
+        placeholder="Amount (SOL)"
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+      />
+
+      <button onClick={send}>Send</button>
+
+      {result && <p>{result}</p>}
+    </div>
+  );
+}
