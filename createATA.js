@@ -10,7 +10,7 @@ const { ensureATA } = require("./services/solana");
 // -----------------------------
 // CONFIG
 // -----------------------------
-const MINT = "2J8bP35XdfmRZCTj7WUdZ4TQGqaXcFj4kd6rpLYxpump";
+const MINT = "VSKXrgwu5mtbdSZS7Au81p1RgLQupWwYXX1L2cWpump";
 const OWNER_PUBKEY = "8R1SU9DGhaxwHU6ZnHLDNuN3ymdz84VCUHJPs1k7TLLb";
 
 // -----------------------------

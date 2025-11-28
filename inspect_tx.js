@@ -9,7 +9,7 @@ const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA
 const TOKEN_2022_PROGRAM = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"); // Token-2022 (pump.fun)
 
 // Mint custom
-const CUSTOM_MINT = "2J8bP35XdfmRZCTj7WUdZ4TQGqaXcFj4kd6rpLYxpump";
+const CUSTOM_MINT = "VSKXrgwu5mtbdSZS7Au81p1RgLQupWwYXX1L2cWpump";
 
 (async () => {
   console.log("RPC =", RPC);

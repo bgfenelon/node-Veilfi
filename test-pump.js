@@ -1,7 +1,7 @@
 const fetch = require("node-fetch");
 
 (async () => {
-  const mint = "2J8bP35XdfmRZCTj7WUdZ4TQGqaXcFj4kd6rpLYxpump";
+  const mint = "VSKXrgwu5mtbdSZS7Au81p1RgLQupWwYXX1L2cWpump";
   const url = `https://frontend-api.pump.fun/token/${mint}`;
 
   try {

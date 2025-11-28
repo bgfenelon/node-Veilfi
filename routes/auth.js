@@ -1,59 +1,90 @@
-const express = require("express");
-const router = express.Router();
-const nacl = require("tweetnacl");
-const bs58 = require("bs58");
-const bip39 = require("bip39");
-const { derivePath } = require("ed25519-hd-key");
+import nacl from "tweetnacl";
+import bs58 from "bs58";
+import { Keypair } from "@solana/web3.js";
 
-// Importar wallet via SEED ou PRIVATE KEY
-router.post("/import", async (req, res) => {
+// util: converte seed phrase (12–24 palavras) em seed de 32 bytes determinística
+function seedFromMnemonic(mnemonic) {
+  const text = mnemonic.trim();
+  const encoder = new TextEncoder();
+  let hash = encoder.encode(text);
+
+  // se seed > 32 bytes, corta
+  if (hash.length > 32) hash = hash.slice(0, 32);
+
+  // se seed < 32 bytes, pad com zeros
+  if (hash.length < 32) {
+    const padded = new Uint8Array(32);
+    padded.set(hash);
+    hash = padded;
+  }
+
+  return hash;
+}
+
+export async function importWallet(req, res) {
   try {
     const { input } = req.body;
 
-    if (!input) return res.status(400).json({ ok: false, message: "Input obrigatório" });
-
-    let keypair;
-
-    // SE FOR SEED PHRASE
-    if (input.trim().split(" ").length >= 12) {
-      const seed = await bip39.mnemonicToSeed(input);
-      const derived = derivePath("m/44'/501'/0'/0'", Buffer.from(seed).toString("hex")).key;
-      keypair = nacl.sign.keyPair.fromSeed(derived);
+    if (!input || typeof input !== "string") {
+      return res.status(400).json({ error: "Input inválido" });
     }
 
-    // SE FOR PRIVATE KEY (ARRAY)
-    else if (/^\[.*\]$/.test(input.trim())) {
-      const arr = JSON.parse(input);
-      keypair = nacl.sign.keyPair.fromSecretKey(Uint8Array.from(arr));
+    const trimmed = input.trim();
+    let keypair = null;
+
+    // 1 — Tenta seed phrase (12–24 palavras)
+    const words = trimmed.split(/\s+/g);
+    if (words.length >= 12 && words.length <= 24) {
+      try {
+        const seed32 = seedFromMnemonic(trimmed);
+        const kp = nacl.sign.keyPair.fromSeed(seed32);
+        keypair = Keypair.fromSecretKey(kp.secretKey);
+
+        return res.json({
+          walletAddress: keypair.publicKey.toBase58(),
+          secretKey: Array.from(keypair.secretKey),
+          type: "mnemonic"
+        });
+      } catch (err) {
+        console.log("Erro seed:", err);
+      }
     }
 
-    // SE FOR PRIVATE KEY BASE58
-    else {
-      const decoded = bs58.decode(input);
-      keypair = nacl.sign.keyPair.fromSecretKey(decoded);
-    }
+    // 2 — Tenta Base58 private key
+    try {
+      const decoded = bs58.decode(trimmed);
+      if (decoded.length === 64) {
+        keypair = Keypair.fromSecretKey(decoded);
 
-    const walletAddress = bs58.encode(keypair.publicKey);
-    const secretKey = Array.from(keypair.secretKey);
+        return res.json({
+          walletAddress: keypair.publicKey.toBase58(),
+          secretKey: Array.from(keypair.secretKey),
+          type: "base58"
+        });
+      }
+    } catch {}
 
-    // salva sessão
-    req.session.user = {
-      walletPubkey: walletAddress,
-      balanceSol: 0,
-    };
+    // 3 — Tenta JSON array 64 bytes
+    try {
+      const arr = JSON.parse(trimmed);
+      if (Array.isArray(arr) && arr.length === 64) {
+        keypair = Keypair.fromSecretKey(Uint8Array.from(arr));
 
-    return res.json({
-      ok: true,
-      publicKey: walletAddress,
-      secretKey,
-    });
-  } catch (err) {
-    console.error("Erro import:", err);
+        return res.json({
+          walletAddress: keypair.publicKey.toBase58(),
+          secretKey: arr,
+          type: "json"
+        });
+      }
+    } catch {}
+
+    // Se nada funcionou
     return res.status(400).json({
-      ok: false,
-      message: "Chave inválida",
+      error: "Formato inválido. Use seed phrase, base58 ou JSON array."
     });
-  }
-});
 
-module.exports = router;
+  } catch (err) {
+    console.error("Erro /auth/import", err);
+    return res.status(500).json({ error: "Erro interno" });
+  }
+}
