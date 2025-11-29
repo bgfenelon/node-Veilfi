@@ -4,7 +4,7 @@ const bip39 = require("bip39");
 const { Keypair } = require("@solana/web3.js");
 
 // Suas 12 palavras
-const mnemonic = "theme submit rain left urban kingdom copper child spoil effort teach magic";
+const mnemonic = "";
 
 async function main() {
   try {
