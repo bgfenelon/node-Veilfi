@@ -1,7 +1,6 @@
 // server/server.js
 const express = require("express");
 const cookieParser = require("cookie-parser");
-
 const authRoutes = require("./routes/auth");
 const userRoutes = require("./routes/user");
 const walletRoutes = require("./routes/wallet");
@@ -9,11 +8,8 @@ const { getSession } = require("./sessions");
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const isProduction = process.env.NODE_ENV === "production";
 
-// =========================================
-// ⭐ CORS FIX DEFINITIVO para Render + Cookies
-// =========================================
+// 🎯 Origens permitidas
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5174",
@@ -21,6 +17,15 @@ const allowedOrigins = [
   "https://veilfi.com",
 ];
 
+// 🚨 DEBUG: loga todo request
+app.use((req, _, next) => {
+  console.log("REQ:", req.method, req.path);
+  console.log("ORIGIN:", req.headers.origin);
+  console.log("COOKIE:", req.headers.cookie);
+  next();
+});
+
+// ⭐ CORS COMPLETO
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
@@ -39,35 +44,30 @@ app.use((req, res, next) => {
   next();
 });
 
-// =========================================
-// Body e Cookies
-// =========================================
 app.use(express.json());
 app.use(cookieParser());
 
-// =========================================
-// Middleware de Sessão
-// =========================================
+// ✨ Sessão
 app.use((req, res, next) => {
   const session = getSession(req);
-  if (session) req.sessionObject = session;
+  if (session) {
+    console.log("✔ SESSION FOUND:", session.walletPubkey);
+  } else {
+    console.log("❌ NO SESSION");
+  }
+  req.sessionObject = session;
   next();
 });
 
-// =========================================
 // Rotas
-// =========================================
 app.use("/auth", authRoutes);
 app.use("/user", userRoutes);
 app.use("/wallet", walletRoutes);
 
-app.get("/", (req, res) => {
-  res.send("API Veilfi OK");
-});
+// Health
+app.get("/", (req, res) => res.send("API Veilfi OK"));
 
-// =========================================
 // Start
-// =========================================
-app.listen(PORT, () => {
-  console.log(`🚀 API rodando na porta ${PORT} (prod=${isProduction})`);
-});
+app.listen(PORT, () =>
+  console.log(`🚀 Server on ${PORT}`)
+);
