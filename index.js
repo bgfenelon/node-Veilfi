@@ -16,6 +16,7 @@ const PORT = process.env.PORT || 3001;
 
 const isProd = process.env.NODE_ENV === "production";
 
+
 /* =============================================
    BASIC MIDDLEWARES
 ============================================= */
@@ -39,6 +40,7 @@ app.use(
 /* =============================================
    EXPRESS-SESSION
 ============================================= */
+
 app.use(
   session({
     name: "sid",
@@ -47,8 +49,8 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: true,
-      sameSite: "none",
+      secure: isProd,                    // HTTPS only in production!
+      sameSite: isProd ? "none" : "lax", // cross-site only in prod
       maxAge: 7 * 24 * 60 * 60 * 1000,
     },
   })
