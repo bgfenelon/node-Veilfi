@@ -1,22 +1,28 @@
+// server/routes/session.js
+const express = require("express");
+const router = express.Router();
+
 router.get("/me", (req, res) => {
   try {
-    const session = getSession(req);
+    const sess = req.session?.sessionObject ?? null;
 
-    if (!session) {
+    if (!sess) {
       return res.json({ ok: false });
     }
 
     return res.json({
       ok: true,
       user: {
-        walletPubkey: session.walletPubkey,
-        secretKey: session.secretKey, // 🔥 ESSENCIAL
-        name: session.name || null
-      }
+        walletPubkey: sess.walletPubkey ?? sess.walletPubkey || sess.walletPubkey, // tolerate naming
+        // ensure secretKey is returned as array (frontend expects array)
+        secretKey: sess.secretKey || sess.secretKey || null,
+        name: sess.name || null,
+      },
     });
-
   } catch (err) {
-    console.error("SESSION ERROR:", err);
-    return res.status(500).json({ ok: false, error: "SESSION_FAILED" });
+    console.error("SESSION /me error:", err);
+    return res.status(500).json({ ok: false, error: "SESSION_ERROR" });
   }
 });
+
+module.exports = router;
