@@ -14,6 +14,9 @@ const sessionRoutes = require("./routes/session");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Detectar ambiente
+const isProd = process.env.NODE_ENV === "production";
+
 /* =============================================
    MIDDLEWARES BÁSICOS
 ============================================= */
@@ -23,37 +26,39 @@ app.use(cookieParser());
 app.use(
   cors({
     origin: [
-      "http://localhost:5173",
-      "https://veilfi.space",
+      "http://localhost:5173",  // dev
+      "https://veilfi.space",  // prod
       process.env.FRONTEND_ORIGIN,
     ].filter(Boolean),
-    credentials: true,
+    credentials: true, // necessário para enviar cookies
   })
 );
 
 /* =============================================
-   EXPRESS-SESSION (A ÚNICA SESSÃO DO SISTEMA)
+   EXPRESS-SESSION (CORRIGIDO PARA DEV E PROD)
 ============================================= */
 app.use(
   session({
     name: process.env.SESSION_NAME || "sid",
-    secret: process.env.SESSION_SECRET || "development-secret-change-me",
+    secret: process.env.SESSION_SECRET || "dev-secret-change-me",
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: true,
-      sameSite: "none",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+
+      // 🔥 Em produção → HTTPS + SameSite None
+      // 🔥 Em localhost → insecure permitido
+      secure: isProd,                  
+      sameSite: isProd ? "none" : "lax",
+
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 dias
     },
   })
 );
 
 /* =============================================
-   🚨 REMOVIDO: NÃO USAR MAIS SESSIONOBJECT CUSTOM
-   (Isso QUEBRAVA a wallet e deletava a secretKey)
+   🔥 REMOVIDO: esse bloco quebrava a sessão
 ============================================= */
-// ❌ REMOVIDO COMPLETAMENTE
 // app.use((req, res, next) => {
 //   req.sessionObject = req.session.sessionObject || null;
 //   next();
@@ -72,6 +77,6 @@ app.get("/", (req, res) => {
 });
 
 /* ============================================= */
-app.listen(PORT, () => {
-  console.log(`🚀 Backend Veilfi rodando na porta ${PORT}`);
-});
+app.listen(PORT, () =>
+  console.log(`🚀 Backend Veilfi rodando na porta ${PORT}`)
+);
