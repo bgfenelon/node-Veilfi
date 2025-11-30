@@ -13,9 +13,8 @@ router.get("/me", (req, res) => {
     return res.json({
       ok: true,
       user: {
-        walletPubkey: sess.walletPubkey ?? sess.walletPubkey || sess.walletPubkey, // tolerate naming
-        // ensure secretKey is returned as array (frontend expects array)
-        secretKey: sess.secretKey || sess.secretKey || null,
+        walletPubkey: sess.walletPubkey || null,
+        secretKey: Array.isArray(sess.secretKey) ? sess.secretKey : null,
         name: sess.name || null,
       },
     });
