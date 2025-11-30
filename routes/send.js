@@ -1,64 +1,97 @@
-import React, { useState, useEffect } from "react";
-import { postJSON, getJSON } from "../../services/api";
-import { useAuth } from "../../context/Auth";
+const express = require("express");
+const router = express.Router();
+const bs58 = require("bs58");
 
-export default function SendPage() {
-  const { session } = useAuth();
+const {
+  Connection,
+  Keypair,
+  SystemProgram,
+  Transaction,
+  sendAndConfirmTransaction,
+  PublicKey,
+  LAMPORTS_PER_SOL,
+} = require("@solana/web3.js");
 
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [amount, setAmount] = useState("");
-  const [result, setResult] = useState<string | null>(null);
+// === MAINNET REAL ===
+const RPC_URL =
+  process.env.RPC_URL ||
+  "https://mainnet.helius-rpc.com/?api-key=1581ae46-832d-4d46-bc0c-007c6269d2d9";
 
-  useEffect(() => {
-    if (session?.walletAddress) {
-      setFrom(session.walletAddress);
-      return;
-    }
+const connection = new Connection(RPC_URL, {
+  commitment: "confirmed",
+});
 
-    getJSON("/session/me").then((res) => {
-      if (res.ok) setFrom(res.user.walletPubkey);
-    });
-  }, [session]);
-
-  async function send() {
-    setResult(null);
-
-    if (!from) {
-      setResult("Wallet not loaded.");
-      return;
-    }
-
-    const res = await postJSON("/wallet/send", {
-      to,
-      amount: Number(amount),
-    });
-
-    if (!res.ok) setResult(res.error || "Erro");
-    else setResult("Tx: " + res.signature);
+// Converte a secretKey recebida (array / base58 / json)
+function keypairFromSecretKey(pk) {
+  // array direto
+  if (Array.isArray(pk)) {
+    return Keypair.fromSecretKey(Uint8Array.from(pk));
   }
 
-  return (
-    <div>
-      <h1>Send</h1>
+  // JSON
+  try {
+    const json = JSON.parse(pk);
+    if (Array.isArray(json)) {
+      return Keypair.fromSecretKey(Uint8Array.from(json));
+    }
+  } catch {}
 
-      <input value={from} disabled />
-
-      <input
-        placeholder="Destination"
-        value={to}
-        onChange={(e) => setTo(e.target.value)}
-      />
-
-      <input
-        placeholder="Amount (SOL)"
-        value={amount}
-        onChange={(e) => setAmount(e.target.value)}
-      />
-
-      <button onClick={send}>Send</button>
-
-      {result && <p>{result}</p>}
-    </div>
-  );
+  // base58
+  try {
+    return Keypair.fromSecretKey(bs58.decode(pk));
+  } catch (err) {
+    throw new Error("Invalid secret key format");
+  }
 }
+
+// ========== SEND REAL SOL ==========
+router.post("/send", async (req, res) => {
+  try {
+    let { secretKey, recipient, amount } = req.body;
+
+    if (!secretKey || !recipient || !amount) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
+
+    // Amount sempre em número
+    amount = Number(amount);
+    if (isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ error: "Invalid amount" });
+    }
+
+    const sender = keypairFromSecretKey(secretKey);
+    const to = new PublicKey(recipient);
+
+    const lamports = Math.floor(amount * LAMPORTS_PER_SOL);
+
+    // Criar transação REAL
+    const tx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: sender.publicKey,
+        toPubkey: to,
+        lamports,
+      })
+    );
+
+    tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+    tx.feePayer = sender.publicKey;
+
+    const signature = await sendAndConfirmTransaction(
+      connection,
+      tx,
+      [sender],
+      {
+        skipPreflight: false,
+        commitment: "confirmed",
+      }
+    );
+
+    return res.json({ signature });
+
+  } catch (err) {
+    console.error("SEND ERROR:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+module.exports = router;
