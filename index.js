@@ -14,10 +14,11 @@ const sessionRoutes = require("./routes/session");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-const isProd = process.env.NODE_ENV === "production";
+// Render = sempre produção
+const isProd = true;
 
 /* =============================================
-   BODY PARSE (IMPORTANTE!)
+   BODY PARSERS
 ============================================= */
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true, limit: "5mb" }));
@@ -28,7 +29,7 @@ app.use(express.urlencoded({ extended: true, limit: "5mb" }));
 app.use(cookieParser());
 
 /* =============================================
-   CORS (FUNCIONA PROD + LOCAL)
+   CORS (FUNCIONANDO)
 ============================================= */
 app.use(
   cors({
@@ -42,7 +43,7 @@ app.use(
 );
 
 /* =============================================
-   SESSION (FINAL, FUNCIONANDO)
+   SESSION (A CONFIGURAÇÃO CERTA)
 ============================================= */
 app.use(
   session({
@@ -52,14 +53,13 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: true,        // Render usa HTTPS
-      sameSite: "none",    // Necessário p/ cookies cross-domain
-      domain: "veilfi.space", // ADICIONADO
+      secure: true,         // Render = HTTPS
+      sameSite: "none",     // CROSS DOMAIN NECESSÁRIO!
+      // ❗️ NÃO DEFINA domain
       maxAge: 7 * 24 * 60 * 60 * 1000,
     },
   })
 );
-
 
 /* =============================================
    ROTAS
