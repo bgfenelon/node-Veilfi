@@ -1,60 +1,57 @@
-// server/routes/wallet.js
-
-const express = require("express");
-const router = express.Router();
-const {
-  Connection,
-  PublicKey,
-  Keypair,
-  SystemProgram,
-  Transaction,
-  sendAndConfirmTransaction,
-} = require("@solana/web3.js");
-const bs58 = require("bs58");
-
-const RPC = process.env.RPC_URL;
-const connection = new Connection(RPC, "confirmed");
-
-/* ============================================================
-   SEND SOL (sem requireAuth)
-============================================================ */
 router.post("/send", async (req, res) => {
   try {
-    const { fromSecret, to, amount } = req.body;
+    const session = req.sessionObject;
 
-    if (!fromSecret || !to || !amount) {
-      return res.status(400).json({ error: "Missing fields" });
+    if (!session) {
+      return res.status(401).json({ ok: false, error: "NO_SESSION" });
     }
 
-    const sender = Keypair.fromSecretKey(Buffer.from(JSON.parse(fromSecret)));
+    const { secretKey } = session;
+    const { to, amount } = req.body;
 
-    const recipient = new PublicKey(to);
+    // valida secretKey
+    if (!secretKey || !Array.isArray(secretKey) || secretKey.length !== 64) {
+      return res.status(400).json({ ok: false, error: "INVALID_SECRET_KEY" });
+    }
 
-    const tx = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: sender.publicKey,
-        toPubkey: recipient,
-        lamports: Math.floor(amount * 1_000_000_000),
-      })
+    // valida amount corretamente
+    const solAmount = Number(amount);
+    if (!to || isNaN(solAmount) || solAmount <= 0) {
+      return res.status(400).json({ ok: false, error: "INVALID_AMOUNT" });
+    }
+
+    const fromKeypair = Keypair.fromSecretKey(Uint8Array.from(secretKey));
+    const toPubkey = new PublicKey(to);
+
+    const lamports = Math.floor(solAmount * 1e9);
+
+    const instr = SystemProgram.transfer({
+      fromPubkey: fromKeypair.publicKey,
+      toPubkey,
+      lamports,
+    });
+
+    const tx = new Transaction().add(instr);
+
+    // Solana SDK recomenda não setar blockhash manualmente
+    const signature = await sendAndConfirmTransaction(
+      connection,
+      tx,
+      [fromKeypair],
+      { commitment: "confirmed" }
     );
-
-    const signature = await sendAndConfirmTransaction(connection, tx, [sender]);
 
     return res.json({
       ok: true,
       signature,
+      explorer: `https://explorer.solana.com/tx/${signature}?cluster=devnet`,
     });
   } catch (err) {
-    console.log("SEND ERROR:", err);
-    return res.status(500).json({ error: err.message });
+    console.error("SEND ERROR:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "SEND_FAILED",
+      details: err.message || String(err),
+    });
   }
 });
-
-/* ============================================================
-   Address (já estava correto)
-============================================================ */
-router.get("/address", (req, res) => {
-  return res.json({ ok: true, address: req.sessionObject?.walletPubkey });
-});
-
-module.exports = router;

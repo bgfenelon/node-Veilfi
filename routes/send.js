@@ -1,31 +1,41 @@
 import React, { useState, useEffect } from "react";
 import { postJSON, getJSON } from "../../services/api";
+import { useAuth } from "../../context/Auth";
 
 export default function SendPage() {
+  const { session } = useAuth();
+
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [amount, setAmount] = useState("");
   const [result, setResult] = useState<string | null>(null);
 
   useEffect(() => {
+    if (session?.walletAddress) {
+      setFrom(session.walletAddress);
+      return;
+    }
+
     getJSON("/session/me").then((res) => {
       if (res.ok) setFrom(res.user.walletPubkey);
     });
-  }, []);
+  }, [session]);
 
   async function send() {
     setResult(null);
+
+    if (!from) {
+      setResult("Wallet not loaded.");
+      return;
+    }
 
     const res = await postJSON("/wallet/send", {
       to,
       amount: Number(amount),
     });
 
-    if (!res.ok) {
-      setResult(res.error || "Erro");
-    } else {
-      setResult("Tx: " + res.signature);
-    }
+    if (!res.ok) setResult(res.error || "Erro");
+    else setResult("Tx: " + res.signature);
   }
 
   return (

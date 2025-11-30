@@ -2,8 +2,10 @@
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
+const session = require("express-session");
 require("dotenv").config();
 
+// rotas
 const authRoutes = require("./routes/auth");
 const walletRoutes = require("./routes/wallet");
 const userRoutes = require("./routes/user");
@@ -12,28 +14,51 @@ const sessionRoutes = require("./routes/session");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// =============================================
+// MIDDLEWARES BÁSICOS
+// =============================================
 app.use(express.json());
 app.use(cookieParser());
 
+// CORS (ajuste a origem se necessário)
 app.use(
   cors({
     origin: [
-      "https://veilfi.space",
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "https://veifi-vite.onrender.com",
-    ],
+        "http://localhost:5173",
+      "https://veilfi.space",   
+      process.env.FRONTEND_ORIGIN
+    ].filter(Boolean),
     credentials: true,
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
-app.options("*", cors());
 
-// 👉 NÃO USE sessionMiddleware
-// ❌ app.use(sessionMiddleware);
+// =============================================
+// SESSÃO (CRÍTICO — SEM ISSO O BACK NÃO LÊ A WALLET)
+// =============================================
+app.use(
+  session({
+    name: process.env.SESSION_NAME || "sid",
+    secret: process.env.SESSION_SECRET || "development-secret-change-me",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: false, // coloque true se usar HTTPS
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    },
+  })
+);
 
+// Compatibilidade com código existente
+app.use((req, res, next) => {
+  req.sessionObject = req.session.sessionObject || null;
+  next();
+});
+
+// =============================================
+// ROTAS
+// =============================================
 app.use("/auth", authRoutes);
 app.use("/wallet", walletRoutes);
 app.use("/user", userRoutes);
@@ -43,4 +68,7 @@ app.get("/", (req, res) => {
   res.send("API OK - Veilfi Backend Running");
 });
 
-app.listen(PORT, () => console.log(`API running on port ${PORT}`));
+// =============================================
+app.listen(PORT, () =>
+  console.log(`🚀 Backend Veilfi rodando na porta ${PORT}`)
+);
