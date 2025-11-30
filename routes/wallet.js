@@ -1,111 +1,91 @@
-// server/routes/wallet.js
 const express = require("express");
 const router = express.Router();
-
 const {
   Connection,
   PublicKey,
   Keypair,
   SystemProgram,
-  Transaction,
   sendAndConfirmTransaction,
+  Transaction
 } = require("@solana/web3.js");
 
-const { getSession } = require("../sessions");
+// RPC principal
+const RPC = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
 
-const RPC_URL =
-  "https://frequent-soft-daylight.solana-mainnet.quiknode.pro/db097341fa55b3a5bf3e5d96776910263c3a492a/";
+// CARTEIRA DA TREASURY (recebe a taxa)
+const TREASURY_PUBKEY = process.env.TREASURY_PUBKEY;
 
-const connection = new Connection(RPC_URL, "confirmed");
-
-/* ===========================================================
-   🔥 CORS FIX — ESSENCIAL PARA O RENDER ACEITAR PRE-FLIGHT
-=========================================================== */
-router.use((req, res, next) => {
-  const origin = req.headers.origin || "*";
-
-  res.header("Access-Control-Allow-Origin", origin);
-  res.header("Access-Control-Allow-Credentials", "true");
-  res.header("Access-Control-Allow-Headers", "Content-Type");
-  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200); // preflight resolvido!
-  }
-
-  next();
-});
-
-/* ===========================================================
-   🟢 BALANCE
-=========================================================== */
-router.post("/balance", async (req, res) => {
-  try {
-    const { userPubkey } = req.body;
-
-    if (!userPubkey)
-      return res.status(400).json({ error: "userPubkey required" });
-
-    const lamports = await connection.getBalance(new PublicKey(userPubkey));
-
-    return res.json({
-      ok: true,
-      balance: lamports / 1e9,
-    });
-  } catch (err) {
-    console.error("BALANCE ERROR:", err);
-    return res.status(500).json({ ok: false, error: "BALANCE_FAILED" });
-  }
-});
-
-/* ===========================================================
-   🟡 SEND SOL
-=========================================================== */
 router.post("/send", async (req, res) => {
   try {
-    const session = getSession(req);
+    let { fromPubkey, fromSecretKey, toPubkey, amount } = req.body;
 
-    if (!session)
-      return res.status(401).json({ ok: false, error: "NO_SESSION" });
+    if (!fromPubkey || !fromSecretKey || !toPubkey || !amount) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
 
-    const { walletPubkey, secretKey } = session;
+    amount = Number(amount);
+    if (isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ error: "Invalid amount" });
+    }
 
-    if (!secretKey)
-      return res
-        .status(400)
-        .json({ ok: false, error: "SESSION_NO_KEYPAIR" });
+    if (!TREASURY_PUBKEY) {
+      return res.status(500).json({ error: "TREASURY_PUBKEY not configured" });
+    }
 
-    const { to, amount } = req.body;
+    // Conexão
+    const connection = new Connection(RPC);
 
-    if (!to) return res.status(400).json({ error: "INVALID_TO" });
-    if (!amount || amount <= 0)
-      return res.status(400).json({ error: "INVALID_AMOUNT" });
+    // Secret key base64 → Uint8Array
+    const secretKeyBytes = Uint8Array.from(Buffer.from(fromSecretKey, "base64"));
+    const userKeypair = Keypair.fromSecretKey(secretKeyBytes);
 
-    const fromKeypair = Keypair.fromSecretKey(Uint8Array.from(secretKey));
-    const lamports = Math.floor(amount * 1e9);
+    const from = new PublicKey(fromPubkey);
+    const to = new PublicKey(toPubkey);
+    const treasury = new PublicKey(TREASURY_PUBKEY);
 
+    // 🔥 CÁLCULO DA TAXA
+    const fee = amount * 0.02; // 2%
+    const realAmount = amount - fee;
+
+    if (realAmount <= 0) {
+      return res.status(400).json({ error: "Amount too small after fee" });
+    }
+
+    // lamports
+    const lamportsToSend = Math.floor(realAmount * 1e9);
+    const lamportsFee = Math.floor(fee * 1e9);
+
+    // 🔥 CRIAÇÃO DA TRANSAÇÃO: 1) transferência para usuário 2) taxa para treasury
     const tx = new Transaction().add(
       SystemProgram.transfer({
-        fromPubkey: fromKeypair.publicKey,
-        toPubkey: new PublicKey(to),
-        lamports,
+        fromPubkey: from,
+        toPubkey: to,
+        lamports: lamportsToSend,
+      }),
+      SystemProgram.transfer({
+        fromPubkey: from,
+        toPubkey: treasury,
+        lamports: lamportsFee,
       })
     );
 
-    const sig = await sendAndConfirmTransaction(connection, tx, [
-      fromKeypair,
+    const signature = await sendAndConfirmTransaction(connection, tx, [
+      userKeypair,
     ]);
 
     return res.json({
-      ok: true,
-      signature: sig,
-      explorer: `https://explorer.solana.com/tx/${sig}`,
+      success: true,
+      signature,
+      sent: realAmount,
+      fee: fee,
+      to: toPubkey,
+      treasury: TREASURY_PUBKEY,
     });
+
   } catch (err) {
     console.error("SEND ERROR:", err);
     return res.status(500).json({
-      ok: false,
-      error: "SEND_FAILED",
+      error: "Transaction failed",
       details: err.message,
     });
   }
