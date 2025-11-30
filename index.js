@@ -14,8 +14,8 @@ const sessionRoutes = require("./routes/session");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Detecta ambiente (Render = production)
 const isProd = process.env.NODE_ENV === "production";
-
 
 /* =============================================
    BASIC MIDDLEWARES
@@ -24,23 +24,22 @@ app.use(express.json());
 app.use(cookieParser());
 
 /* =============================================
-   CORS
+   CORS (corrigido)
 ============================================= */
 app.use(
   cors({
     origin: [
-      "http://localhost:5173",
-      "https://node-veilfi-jtae.onrender.com",
-      process.env.FRONTEND_ORIGIN
+      "http://localhost:5173",            // front local
+      "https://node-veilfi-jtae.onrender.com", // backend URL (Render)
+      process.env.FRONTEND_ORIGIN         // front em produção
     ].filter(Boolean),
     credentials: true,
   })
 );
 
 /* =============================================
-   EXPRESS-SESSION
+   EXPRESS-SESSION (DEV + PROD)
 ============================================= */
-
 app.use(
   session({
     name: "sid",
@@ -49,8 +48,13 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: isProd,                    // HTTPS only in production!
-      sameSite: isProd ? "none" : "lax", // cross-site only in prod
+
+      // ⚠ ESSENCIAL:
+      // Localhost = http -> secure:false / sameSite:lax
+      // Render(prod) = https -> secure:true / sameSite:none
+      secure: isProd ? true : false,
+      sameSite: isProd ? "none" : "lax",
+
       maxAge: 7 * 24 * 60 * 60 * 1000,
     },
   })
