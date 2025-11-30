@@ -1,149 +1,184 @@
-// routes/swap.js
 const express = require("express");
 const router = express.Router();
-const { Connection, PublicKey, Keypair, SystemProgram, Transaction } = require("@solana/web3.js");
+const {
+  Connection,
+  PublicKey,
+  Transaction,
+  SystemProgram,
+} = require("@solana/web3.js");
+const {
+  getAssociatedTokenAddress,
+  createTransferInstruction,
+  createAssociatedTokenAccountInstruction,
+} = require("@solana/spl-token");
 const bs58 = require("bs58");
-const dotenv = require("dotenv");
-dotenv.config();
+require("dotenv").config();
 
-/* ============================================================
-   CONFIGURAÇÕES IMPORTANTES
-   ============================================================ */
+/* ============================================
+   CONFIGURAÇÃO (.env)
+============================================ */
 
-// RPC da Solana
-const RPC = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
+const RPC = process.env.RPC_URL;
 const connection = new Connection(RPC, "confirmed");
 
-// Treasury (admin)
-const TREASURY_PUBKEY = process.env.TREASURY_PUBKEY;
-const TREASURY_PRIVATE_KEY = process.env.TREASURY_PRIVATE_KEY;
+const TREASURY_PUBKEY = new PublicKey(process.env.TREASURY_PUBKEY);
+const TREASURY_PRIVATE_KEY = bs58.decode(process.env.TREASURY_PRIVATE_KEY);
+const treasuryWallet = require("@solana/web3.js").Keypair.fromSecretKey(
+  TREASURY_PRIVATE_KEY
+);
 
-// Token Mint do Pump.fun
-function getMint() {
-  const raw = process.env.TOKEN_MINT;
-  if (!raw || typeof raw !== "string") throw new Error("TOKEN_MINT is missing");
-  return new PublicKey(raw.trim());
-}
+const TOKEN_MINT = new PublicKey(process.env.TOKEN_MINT);
 
-const MINT = getMint();
+const RATE = Number(process.env.SWAP_RATE || 1000); // tokens por SOL
+const FEE_PERCENT = Number(process.env.SWAP_FEE_PERCENT || 2) / 100;
 
-/* ============================================================
-   VALIDAR E CARREGAR WALLET ADMIN
-   ============================================================ */
+/* ============================================
+   1. QUOTE — quanto o usuário recebe?
+============================================ */
 
-function getTreasuryWallet() {
-  if (!TREASURY_PRIVATE_KEY || typeof TREASURY_PRIVATE_KEY !== "string") {
-    throw new Error("Treasure PRIVATE KEY missing");
-  }
-
+router.post("/quote", async (req, res) => {
   try {
-    const secret = bs58.decode(TREASURY_PRIVATE_KEY);
-    return Keypair.fromSecretKey(secret);
+    const { solAmount } = req.body;
+
+    if (!solAmount || solAmount <= 0)
+      return res.status(400).json({ error: "Invalid solAmount" });
+
+    const fee = solAmount * FEE_PERCENT;
+    const amountAfterFee = solAmount - fee;
+
+    const tokens = amountAfterFee * RATE;
+
+    return res.json({
+      success: true,
+      solAmount,
+      feePercent: FEE_PERCENT * 100,
+      amountAfterFee,
+      tokens,
+    });
   } catch (err) {
-    console.error("Invalid PRIVATE KEY format:", err);
-    throw new Error("Invalid PRIVATE KEY format");
+    console.error("QUOTE ERROR:", err);
+    return res.status(500).json({ error: "Internal quote error" });
   }
-}
+});
 
-/* ============================================================
-   SWAP: usuário paga SOL → recebe token PUMP.FUN
-   ============================================================ */
+/* ============================================
+   2. TRANSACTION — gerar TX para o usuário assinar
+============================================ */
 
-router.post("/", async (req, res) => {
+router.post("/transaction", async (req, res) => {
   try {
-    const { amountSol, userWallet } = req.body;
+    const { solAmount, userWallet } = req.body;
 
-    if (!amountSol || amountSol <= 0) {
-      return res.status(400).json({ error: "Invalid amountSol" });
-    }
+    if (!solAmount || solAmount <= 0)
+      return res.status(400).json({ error: "Invalid solAmount" });
 
-    if (!userWallet || userWallet.length < 20) {
-      return res.status(400).json({ error: "Invalid userWallet" });
-    }
+    if (!userWallet) return res.status(400).json({ error: "Missing userWallet" });
 
     const userPubkey = new PublicKey(userWallet);
-    const treasury = getTreasuryWallet();
 
-    // Taxa de 2%
-    const feePercent = 0.02;
-    const fee = amountSol * feePercent;
-    const amountAfterFee = amountSol - fee;
+    const fee = solAmount * FEE_PERCENT;
+    const amountAfterFee = solAmount - fee;
 
     const lamports = Math.floor(amountAfterFee * 1_000_000_000);
     const lamportsFee = Math.floor(fee * 1_000_000_000);
 
-    /* ============================================================
-       1 — usuário envia SOL → treasury
-       ============================================================ */
-
-    const tx1 = new Transaction().add(
+    // Usuário → Treasury
+    const tx = new Transaction().add(
       SystemProgram.transfer({
         fromPubkey: userPubkey,
-        toPubkey: treasury.publicKey,
+        toPubkey: TREASURY_PUBKEY,
         lamports: lamports + lamportsFee,
       })
     );
 
-    const blockhash1 = await connection.getLatestBlockhash();
-    tx1.recentBlockhash = blockhash1.blockhash;
-    tx1.feePayer = userPubkey;
+    const blockhash = await connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash.blockhash;
+    tx.feePayer = userPubkey;
 
-    const serialized1 = tx1.serialize({ requireAllSignatures: false });
-    const base64Tx1 = serialized1.toString("base64");
-
-    /* ============================================================
-       2 — treasury envia TOKEN_MINT → user
-       ============================================================ */
-
-    const tx2 = new Transaction();
-
-    const tokenProgram = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-    const associatedTokenProgram = new PublicKey("ATokenGPv…"); // deixar padrão
-
-    const ataInstruction = require("@solana/spl-token").createAssociatedTokenAccountInstruction(
-      treasury.publicKey,
-      require("@solana/spl-token").getAssociatedTokenAddressSync(MINT, userPubkey),
-      userPubkey,
-      MINT
-    );
-
-    tx2.add(ataInstruction);
-
-    const sendTokenIx = require("@solana/spl-token").createTransferInstruction(
-      require("@solana/spl-token").getAssociatedTokenAddressSync(MINT, treasury.publicKey),
-      require("@solana/spl-token").getAssociatedTokenAddressSync(MINT, userPubkey),
-      treasury.publicKey,
-      lamports // Aqui você define quantos tokens equivalem ao SOL
-    );
-
-    tx2.add(sendTokenIx);
-
-    const blockhash2 = await connection.getLatestBlockhash();
-    tx2.recentBlockhash = blockhash2.blockhash;
-    tx2.feePayer = treasury.publicKey;
-
-    tx2.sign(treasury);
-
-    const serialized2 = tx2.serialize();
-    const base64Tx2 = serialized2.toString("base64");
-
-    /* ============================================================
-       RETORNO PARA O FRONT
-       ============================================================ */
+    const serialized = tx.serialize({
+      requireAllSignatures: false,
+    });
 
     return res.json({
       success: true,
-      message: "Swap initialized",
-      sendSolTransaction: base64Tx1, // usuário assina
-      sendTokenTransaction: base64Tx2, // backend assina e envia token
-      feePercent,
+      transaction: serialized.toString("base64"),
+      feePercent: FEE_PERCENT * 100,
+    });
+  } catch (err) {
+    console.error("TX ERROR:", err);
+    return res.status(500).json({ error: "Transaction error" });
+  }
+});
+
+/* ============================================
+   3. EXECUTE — enviar tokens após SOL confirmado
+============================================ */
+
+router.post("/execute", async (req, res) => {
+  try {
+    const { solAmount, userWallet } = req.body;
+
+    if (!solAmount) return res.status(400).json({ error: "Missing solAmount" });
+    if (!userWallet) return res.status(400).json({ error: "Missing userWallet" });
+
+    const user = new PublicKey(userWallet);
+
+    /* Quantidade de tokens */
+    const fee = solAmount * FEE_PERCENT;
+    const amountAfterFee = solAmount - fee;
+    const tokenAmount = Math.floor(amountAfterFee * RATE);
+
+    /* ATA do usuário */
+    const userAta = await getAssociatedTokenAddress(TOKEN_MINT, user);
+    const treasuryAta = await getAssociatedTokenAddress(
+      TOKEN_MINT,
+      TREASURY_PUBKEY
+    );
+
+    const tx = new Transaction();
+
+    // criar ATA se não existe
+    const info = await connection.getAccountInfo(userAta);
+    if (!info) {
+      tx.add(
+        createAssociatedTokenAccountInstruction(
+          treasuryWallet.publicKey,
+          userAta,
+          user,
+          TOKEN_MINT
+        )
+      );
+    }
+
+    // enviar tokens
+    tx.add(
+      createTransferInstruction(
+        treasuryAta,
+        userAta,
+        treasuryWallet.publicKey,
+        tokenAmount
+      )
+    );
+
+    const blockhash = await connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash.blockhash;
+    tx.feePayer = treasuryWallet.publicKey;
+
+    tx.sign(treasuryWallet);
+
+    const signature = await connection.sendRawTransaction(tx.serialize(), {
+      skipPreflight: false,
     });
 
-  } catch (error) {
-    console.error("SWAP ERROR:", error);
-    return res.status(500).json({
-      error: error.message || "Swap failed",
+    return res.json({
+      success: true,
+      signature,
+      amountAfterFee,
+      tokensSent: tokenAmount,
     });
+  } catch (err) {
+    console.error("EXECUTE ERROR:", err);
+    return res.status(500).json({ error: "Execution error" });
   }
 });
 
