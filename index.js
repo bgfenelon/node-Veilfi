@@ -60,7 +60,10 @@ app.use(
    🔥 REMOVIDO: esse bloco quebrava a sessão
 ============================================= */
 // app.use((req, res, next) => {
-//   req.sessionObject = req.session.sessionObject || null;
+app.use((req, res, next) => {
+  req.sessionObject = req.session.sessionObject || null;
+  });
+  next();
 //   next();
 // });
 
