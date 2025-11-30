@@ -1,3 +1,5 @@
+// server/routes/wallet.js
+
 const express = require("express");
 const router = express.Router();
 const {
@@ -5,90 +7,54 @@ const {
   PublicKey,
   Keypair,
   SystemProgram,
+  Transaction,
   sendAndConfirmTransaction,
-  Transaction
 } = require("@solana/web3.js");
+const bs58 = require("bs58");
 
-// RPC principal
-const RPC = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
+const RPC = process.env.RPC_URL;
+const connection = new Connection(RPC, "confirmed");
 
-// CARTEIRA DA TREASURY (recebe a taxa)
-const TREASURY_PUBKEY = process.env.TREASURY_PUBKEY;
-
+/* ============================================================
+   SEND SOL (sem requireAuth)
+============================================================ */
 router.post("/send", async (req, res) => {
   try {
-    let { fromPubkey, fromSecretKey, toPubkey, amount } = req.body;
+    const { fromSecret, to, amount } = req.body;
 
-    if (!fromPubkey || !fromSecretKey || !toPubkey || !amount) {
+    if (!fromSecret || !to || !amount) {
       return res.status(400).json({ error: "Missing fields" });
     }
 
-    amount = Number(amount);
-    if (isNaN(amount) || amount <= 0) {
-      return res.status(400).json({ error: "Invalid amount" });
-    }
+    const sender = Keypair.fromSecretKey(Buffer.from(JSON.parse(fromSecret)));
 
-    if (!TREASURY_PUBKEY) {
-      return res.status(500).json({ error: "TREASURY_PUBKEY not configured" });
-    }
+    const recipient = new PublicKey(to);
 
-    // Conexão
-    const connection = new Connection(RPC);
-
-    // Secret key base64 → Uint8Array
-    const secretKeyBytes = Uint8Array.from(Buffer.from(fromSecretKey, "base64"));
-    const userKeypair = Keypair.fromSecretKey(secretKeyBytes);
-
-    const from = new PublicKey(fromPubkey);
-    const to = new PublicKey(toPubkey);
-    const treasury = new PublicKey(TREASURY_PUBKEY);
-
-    // 🔥 CÁLCULO DA TAXA
-    const fee = amount * 0.02; // 2%
-    const realAmount = amount - fee;
-
-    if (realAmount <= 0) {
-      return res.status(400).json({ error: "Amount too small after fee" });
-    }
-
-    // lamports
-    const lamportsToSend = Math.floor(realAmount * 1e9);
-    const lamportsFee = Math.floor(fee * 1e9);
-
-    // 🔥 CRIAÇÃO DA TRANSAÇÃO: 1) transferência para usuário 2) taxa para treasury
     const tx = new Transaction().add(
       SystemProgram.transfer({
-        fromPubkey: from,
-        toPubkey: to,
-        lamports: lamportsToSend,
-      }),
-      SystemProgram.transfer({
-        fromPubkey: from,
-        toPubkey: treasury,
-        lamports: lamportsFee,
+        fromPubkey: sender.publicKey,
+        toPubkey: recipient,
+        lamports: Math.floor(amount * 1_000_000_000),
       })
     );
 
-    const signature = await sendAndConfirmTransaction(connection, tx, [
-      userKeypair,
-    ]);
+    const signature = await sendAndConfirmTransaction(connection, tx, [sender]);
 
     return res.json({
-      success: true,
+      ok: true,
       signature,
-      sent: realAmount,
-      fee: fee,
-      to: toPubkey,
-      treasury: TREASURY_PUBKEY,
     });
-
   } catch (err) {
-    console.error("SEND ERROR:", err);
-    return res.status(500).json({
-      error: "Transaction failed",
-      details: err.message,
-    });
+    console.log("SEND ERROR:", err);
+    return res.status(500).json({ error: err.message });
   }
+});
+
+/* ============================================================
+   Address (já estava correto)
+============================================================ */
+router.get("/address", (req, res) => {
+  return res.json({ ok: true, address: req.sessionObject?.walletPubkey });
 });
 
 module.exports = router;
