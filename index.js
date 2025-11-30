@@ -20,21 +20,20 @@ const PORT = process.env.PORT || 3001;
 app.use(express.json());
 app.use(cookieParser());
 
-// CORS (ajuste a origem se necessário)
+// CORS (origens permitidas)
 app.use(
   cors({
     origin: [
-        "http://localhost:5173",
-      "https://veilfi.space",   
+      "http://localhost:5173",
+      "https://veilfi.space",
       process.env.FRONTEND_ORIGIN
     ].filter(Boolean),
     credentials: true,
   })
 );
 
-
 // =============================================
-// SESSÃO (CRÍTICO — SEM ISSO O BACK NÃO LÊ A WALLET)
+// SESSÃO (PARTE MAIS IMPORTANTE)
 // =============================================
 app.use(
   session({
@@ -44,7 +43,11 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: false, // coloque true se usar HTTPS
+
+      // 🔥 CONFIGURAÇÃO ESSENCIAL PARA FUNCIONAR NO DOMÍNIO veilfi.space
+      secure: true,       // obrigatório em HTTPS
+      sameSite: "none",   // obrigatório para cookies cross-site
+
       maxAge: 7 * 24 * 60 * 60 * 1000,
     },
   })
