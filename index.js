@@ -7,8 +7,6 @@ const authRoutes = require("./routes/auth");
 const walletRoutes = require("./routes/wallet");
 const userRoutes = require("./routes/user");
 const sessionRoutes = require("./routes/session");
-const swapRoutes = require("./routes/swap");
-
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -35,7 +33,6 @@ app.use(
 app.options("*", cors());
 
 // rotas
-app.use("/swap", swapRoutes);
 app.use("/auth", authRoutes);
 app.use("/wallet", walletRoutes);
 app.use("/user", userRoutes);
