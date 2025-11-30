@@ -14,28 +14,31 @@ const sessionRoutes = require("./routes/session");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Detectar ambiente
+// Detecta se está em produção (Render)
 const isProd = process.env.NODE_ENV === "production";
 
 /* =============================================
-   MIDDLEWARES BÁSICOS
+   BASIC MIDDLEWARES
 ============================================= */
 app.use(express.json());
 app.use(cookieParser());
 
+/* =============================================
+   CORS
+============================================= */
 app.use(
   cors({
     origin: [
-      "http://localhost:5173",  // dev
-      "https://veilfi.space",  // prod
-      process.env.FRONTEND_ORIGIN,
+      "http://localhost:5173",      // Dev local
+      "https://veilfi.space",       // Produção
+      process.env.FRONTEND_ORIGIN,  // Variável opcional
     ].filter(Boolean),
-    credentials: true, // necessário para enviar cookies
+    credentials: true,
   })
 );
 
 /* =============================================
-   EXPRESS-SESSION (CORRIGIDO PARA DEV E PROD)
+   EXPRESS-SESSION (CORRIGIDO 100%)
 ============================================= */
 app.use(
   session({
@@ -46,26 +49,16 @@ app.use(
     cookie: {
       httpOnly: true,
 
-      // 🔥 Em produção → HTTPS + SameSite None
-      // 🔥 Em localhost → insecure permitido
-      secure: isProd,                  
+      // 🔥 Aqui está a correção real:
+      // localhost → HTTP: secure:false / sameSite:lax
+      // produção → HTTPS: secure:true / sameSite:none
+      secure: isProd ? true : false,
       sameSite: isProd ? "none" : "lax",
 
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 dias
     },
   })
 );
-
-/* =============================================
-   🔥 REMOVIDO: esse bloco quebrava a sessão
-============================================= */
-// app.use((req, res, next) => {
-app.use((req, res, next) => {
-  req.sessionObject = req.session.sessionObject || null;
-  next();
-  });
-//   next();
-// });
 
 /* =============================================
    ROTAS
