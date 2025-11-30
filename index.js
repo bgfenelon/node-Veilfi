@@ -29,13 +29,14 @@ app.use(cookieParser());
 app.use(
   cors({
     origin: [
-      "http://localhost:5173",      // Dev local
-      "https://veilfi.space",       // Produção
-      process.env.FRONTEND_ORIGIN,  // Variável opcional
-    ].filter(Boolean),
+      "http://localhost:5173",
+      "https://node-veilfi-jtae.onrender.com", // <---- OBRIGATÓRIO
+      process.env.FRONTEND_ORIGIN || ""
+    ],
     credentials: true,
   })
 );
+
 
 /* =============================================
    EXPRESS-SESSION (CORRIGIDO 100%)
