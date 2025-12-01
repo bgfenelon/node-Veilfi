@@ -10,11 +10,32 @@ router.get("/me", (req, res) => {
       return res.json({ ok: false, user: null });
     }
 
+    let secretKey = sess.secretKey;
+
+    // 🔥 Normalizar secretKey: garantir ARRAY REAL
+    if (typeof secretKey === "string") {
+      try {
+        const parsed = JSON.parse(secretKey);
+        if (Array.isArray(parsed) && parsed.length === 64) {
+          secretKey = parsed;
+        } else {
+          secretKey = null;
+        }
+      } catch {
+        secretKey = null;
+      }
+    }
+
+    // Se for array mas não tiver 64 bytes, também é inválido
+    if (Array.isArray(secretKey) && secretKey.length !== 64) {
+      secretKey = null;
+    }
+
     return res.json({
       ok: true,
       user: {
         walletPubkey: sess.walletPubkey || null,
-        secretKey: sess.secretKey || null,
+        secretKey: secretKey,
         name: sess.name || null,
       },
     });
