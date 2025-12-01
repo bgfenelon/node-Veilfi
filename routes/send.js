@@ -16,38 +16,22 @@ const {
   createTransferInstruction,
 } = require("@solana/spl-token");
 
-// RPC MAINNET
+// RPC
 const RPC_URL =
   process.env.RPC_URL ||
   "https://mainnet.helius-rpc.com/?api-key=1581ae46-832d-4d46-bc0c-007c6269d2d9";
 
-const connection = new Connection(RPC_URL, {
-  commitment: "confirmed",
-});
+const connection = new Connection(RPC_URL, { commitment: "confirmed" });
 
 // MINTS
-const USDC_MINT = new PublicKey(
-  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-);
+const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+const VEIL_MINT = new PublicKey("VSKXrgwu5mtbdSZS7Au81p1RgLQupWwYXX1L2cWpump");
 
-const VEIL_MINT = new PublicKey(
-  "VSKXrgwu5mtbdSZS7Au81p1RgLQupWwYXX1L2cWpump"
-);
-
-// Convert secretKey
+// parse secret key
 function keypairFromSecretKey(pk) {
-  if (Array.isArray(pk)) {
-    return Keypair.fromSecretKey(Uint8Array.from(pk));
-  }
-
   try {
-    const json = JSON.parse(pk);
-    if (Array.isArray(json)) {
-      return Keypair.fromSecretKey(Uint8Array.from(json));
-    }
-  } catch {}
-
-  try {
+    if (Array.isArray(pk)) return Keypair.fromSecretKey(Uint8Array.from(pk));
+    if (pk.trim().startsWith("[")) return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(pk)));
     return Keypair.fromSecretKey(bs58.decode(pk));
   } catch {
     throw new Error("Invalid secret key format");
@@ -59,14 +43,15 @@ router.post("/send", async (req, res) => {
   try {
     let { secretKey, recipient, amount, token } = req.body;
 
-    console.log("TOKEN RECEIVED →", token);
+    console.log("RAW token received =>", JSON.stringify(token));
 
     if (!secretKey || !recipient || !amount || !token) {
       return res.status(400).json({ error: "Missing fields" });
     }
 
-    // 🔥 NORMALIZA TOKEN (corrige SOL/usdc/Usdc/VEIL/etc)
     const tokenNorm = String(token).trim().toUpperCase();
+
+    console.log("NORMALIZED token =>", tokenNorm);
 
     amount = Number(amount);
     if (isNaN(amount) || amount <= 0) {
@@ -77,8 +62,12 @@ router.post("/send", async (req, res) => {
     const senderPublicKey = sender.publicKey;
     const recipientPubkey = new PublicKey(recipient);
 
-    // 1 — SEND SOL
+    // --------------------------
+    // SEND SOL
+    // --------------------------
     if (tokenNorm === "SOL") {
+      console.log("⚠ SENDING SOL");
+
       const lamports = Math.floor(amount * 1e9);
 
       const tx = new Transaction().add(
@@ -92,44 +81,34 @@ router.post("/send", async (req, res) => {
       tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
       tx.feePayer = senderPublicKey;
 
-      const signature = await sendAndConfirmTransaction(
-        connection,
-        tx,
-        [sender],
-        { skipPreflight: false, commitment: "confirmed" }
-      );
-
+      const signature = await sendAndConfirmTransaction(connection, tx, [sender]);
       return res.json({ signature });
     }
 
-    // 2 — SEND SPL (USDC / VEIL)
+    // --------------------------
+    // SELECT SPL TOKEN
+    // --------------------------
     let mint, decimals;
 
     if (tokenNorm === "USDC") {
+      console.log("⚠ SENDING USDC");
       mint = USDC_MINT;
       decimals = 6;
     } else if (tokenNorm === "VEIL") {
+      console.log("⚠ SENDING VEIL");
       mint = VEIL_MINT;
       decimals = 6;
     } else {
       return res.status(400).json({ error: "Invalid token" });
     }
 
-    const fromATA = await getOrCreateAssociatedTokenAccount(
-      connection,
-      sender,
-      mint,
-      senderPublicKey
-    );
-
-    const toATA = await getOrCreateAssociatedTokenAccount(
-      connection,
-      sender,
-      mint,
-      recipientPubkey
-    );
-
+    // --------------------------
+    // SPL TRANSFER
+    // --------------------------
     const rawAmount = Math.floor(amount * 10 ** decimals);
+
+    const fromATA = await getOrCreateAssociatedTokenAccount(connection, sender, mint, senderPublicKey);
+    const toATA = await getOrCreateAssociatedTokenAccount(connection, sender, mint, recipientPubkey);
 
     const ix = createTransferInstruction(
       fromATA.address,
@@ -139,16 +118,10 @@ router.post("/send", async (req, res) => {
     );
 
     const tx = new Transaction().add(ix);
-
     tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
     tx.feePayer = senderPublicKey;
 
-    const signature = await sendAndConfirmTransaction(
-      connection,
-      tx,
-      [sender],
-      { skipPreflight: false, commitment: "confirmed" }
-    );
+    const signature = await sendAndConfirmTransaction(connection, tx, [sender]);
 
     return res.json({ signature });
 
