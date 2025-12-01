@@ -1,5 +1,5 @@
 // ========================
-//  swap.js — SOL <-> USDT (Raydium API)
+//  swap.js — SOL <-> USDC (Raydium API)
 // ========================
 
 require("dotenv").config();
@@ -48,7 +48,9 @@ function toUint8Array(secretKey) {
 // TOKENS OFICIAIS
 // ================================
 const SOL_MINT = "So11111111111111111111111111111111111111112";
-const USDT_MINT = "Es9vMFrzaCERyN2rj8qJea2orGZf4d2Lr8DQJHuhJZ";
+
+// ⭐ USDC OFICIAL
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 // ================================
 // RPC
@@ -59,11 +61,11 @@ const connection = new Connection(
 );
 
 // ================================
-// SWAP RAYDIUM — v3 API
+// SWAP RAYDIUM — v3 API (Agora USDC)
 // ================================
-router.post("/usdt", async (req, res) => {
+router.post("/usdc", async (req, res) => {
   try {
-    console.log("=== RAYDIUM SWAP REQUEST ===");
+    console.log("=== RAYDIUM SWAP REQUEST (USDC) ===");
 
     const {
       carteiraUsuarioPublica,
@@ -89,15 +91,15 @@ router.post("/usdt", async (req, res) => {
     // Definir mints
     let inputMint, outputMint, atomicAmount;
 
-    if (direction === "SOL_TO_USDT") {
+    if (direction === "SOL_TO_USDC") {
       inputMint = SOL_MINT;
-      outputMint = USDT_MINT;
-      atomicAmount = Math.floor(parseFloat(amount) * 1e9);
+      outputMint = USDC_MINT;
+      atomicAmount = Math.floor(parseFloat(amount) * 1e9); // SOL
 
-    } else if (direction === "USDT_TO_SOL") {
-      inputMint = USDT_MINT;
+    } else if (direction === "USDC_TO_SOL") {
+      inputMint = USDC_MINT;
       outputMint = SOL_MINT;
-      atomicAmount = Math.floor(parseFloat(amount) * 1e6);
+      atomicAmount = Math.floor(parseFloat(amount) * 1e6); // USDC tem 6 decimais
 
     } else {
       return res.status(400).json({ error: "Direção inválida." });
@@ -123,7 +125,7 @@ router.post("/usdt", async (req, res) => {
     }
 
     // ========================================
-    // 2) OBTER TRANSAÇÃO DE SWAP
+    // 2) GERAR TRANSAÇÃO DE SWAP
     // ========================================
     const swapResp = await fetch("https://api.raydium.io/v2/sdk/amm/swap", {
       method: "POST",
@@ -174,7 +176,7 @@ router.post("/usdt", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("ERRO NO SWAP:", err);
+    console.error("ERRO NO SWAP (USDC):", err);
     return res.status(500).json({
       error: "Erro no swap.",
       details: err.message,
