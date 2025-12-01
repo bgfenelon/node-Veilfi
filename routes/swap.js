@@ -1,5 +1,5 @@
 // ========================
-//  swap.js — Jupiter SOL <-> USDC (Render Stable Version)
+//  swap.js — Raydium SOL <-> USDC (Render Stable Version)
 // ========================
 
 require("dotenv").config();
@@ -9,18 +9,18 @@ const {
   Connection,
   PublicKey,
   Keypair,
-  VersionedTransaction,
+  Transaction,
+  sendAndConfirmTransaction,
 } = require("@solana/web3.js");
 
 const bs58 = require("bs58");
 
 // ============================================================
-//  🔥 Função DEFINITIVA para aceitar QUALQUER secretKey
+//  Chave: aceita qualquer formato (array, string, base58, objeto)
 // ============================================================
 function toUint8Array(secretKey) {
   try {
     if (secretKey instanceof Uint8Array) return secretKey;
-
     if (Array.isArray(secretKey)) return Uint8Array.from(secretKey);
 
     if (typeof secretKey === "object" && secretKey !== null) {
@@ -43,132 +43,119 @@ function toUint8Array(secretKey) {
 
     throw new Error("Formato de secretKey inválido.");
   } catch (err) {
-    console.error("ERRO CONVERSÃO DE CHAVE:", err);
+    console.error("ERRO CHAVE:", err);
     throw new Error("SecretKey inválida.");
   }
 }
 
 // ============================================================
-//  Config
+//  Configurações
 // ============================================================
-const USDC_MINT = "EPjFWdd5AufqSSqeM2q9HGnFz4Hh9ms4HjHpx2xJLxY";
-const SOL_MINT = "So11111111111111111111111111111111111111112";
-
 const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
 
+const USDC = "EPjFWdd5AufqSSqeM2q9HGnFz4Hh9ms4HjHpx2xJLxY";
+const SOL = "So11111111111111111111111111111111111111112";
+
 // ============================================================
-//  🔥 ROTA ÚNICA DO SWAP VIA JUPITER
+//  Raydium quote endpoint
+// ============================================================
+async function getRaydiumQuote(inputMint, outputMint, amount) {
+  const url =
+    `https://api.raydium.io/v2/pools/amm/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}`;
+
+  const res = await fetch(url);
+  const json = await res.json().catch(() => null);
+
+  if (!json || !json.outAmount) return null;
+
+  return json;
+}
+
+// ============================================================
+//  Raydium swap transaction
+// ============================================================
+async function getRaydiumSwapTx(quote, userPublicKey) {
+  const res = await fetch("https://api.raydium.io/v2/pools/amm/swap", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      quote,
+      owner: userPublicKey.toBase58(),
+      wrapAndUnwrapSol: true,
+    })
+  });
+
+  const json = await res.json().catch(() => null);
+
+  if (!json || !json.transaction) return null;
+
+  return json.transaction;
+}
+
+// ============================================================
+//  🚀 Rota de Swap
 // ============================================================
 router.post("/usdc", async (req, res) => {
   try {
-    const {
-      carteiraUsuarioPublica,
-      carteiraUsuarioPrivada,
-      amount,
-      direction,
-    } = req.body;
+    const { carteiraUsuarioPublica, carteiraUsuarioPrivada, amount, direction } = req.body;
 
     if (!carteiraUsuarioPublica || !carteiraUsuarioPrivada || !amount || !direction) {
       return res.status(400).json({ error: "Dados incompletos." });
     }
 
-    console.log("\n=== SWAP REQUEST RECEIVED ===");
+    console.log("=== RAYDIUM SWAP ===");
     console.log("Public:", carteiraUsuarioPublica);
-    console.log("PRIVATE RAW:", carteiraUsuarioPrivada);
-    console.log("TYPE:", typeof carteiraUsuarioPrivada);
 
-    // Converter chave
     const userUint8 = toUint8Array(carteiraUsuarioPrivada);
     const userKeypair = Keypair.fromSecretKey(userUint8);
     const userPublicKey = new PublicKey(carteiraUsuarioPublica);
 
-    // 1) Direção
     let inputMint, outputMint, amountAtomic;
 
     if (direction === "SOL_TO_USDC") {
-      inputMint = SOL_MINT;
-      outputMint = USDC_MINT;
-      amountAtomic = Math.floor(Number(amount) * 1e9);
+      inputMint = SOL;
+      outputMint = USDC;
+      amountAtomic = Math.floor(amount * 1e9);
     } else if (direction === "USDC_TO_SOL") {
-      inputMint = USDC_MINT;
-      outputMint = SOL_MINT;
-      amountAtomic = Math.floor(Number(amount) * 1e6);
+      inputMint = USDC;
+      outputMint = SOL;
+      amountAtomic = Math.floor(amount * 1e6);
     } else {
       return res.status(400).json({ error: "Direção inválida." });
     }
 
-    // ============================================================
-    //  2) COTAÇÃO — usando endpoint estável da Jupiter (sem bloqueio)
-    // ============================================================
-    const quoteUrl =
-      `https://public.jupiterapi.com/quote/v6?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountAtomic}`;
+    // 1. Cotação
+    const quote = await getRaydiumQuote(inputMint, outputMint, amountAtomic);
 
-    const quoteResponse = await fetch(quoteUrl, {
-      headers: {
-        "User-Agent": "Veilfi-Server",
-        "Accept": "application/json"
-      }
-    });
-
-    const quote = await quoteResponse.json();
-
-    if (!quote.outAmount) {
-      console.log("ERRO AO OBTER COTAÇÃO:", quote);
-      return res.status(500).json({ error: "Falha ao obter cotação Jupiter." });
+    if (!quote) {
+      return res.status(500).json({ error: "Erro ao obter cotação Raydium." });
     }
 
-    // ============================================================
-    //  3) ENVIAR COTAÇÃO PARA GERAR TRANSAÇÃO
-    // ============================================================
-    const swapResp = await fetch("https://public.jupiterapi.com/swap/v6", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "User-Agent": "Veilfi-Server",
-        "Accept": "application/json"
-      },
-      body: JSON.stringify({
-        quote,
-        userPublicKey: userPublicKey.toBase58(),
-        wrapAndUnwrapSol: true,
-      }),
-    });
+    // 2. Criar tx
+    const txBase64 = await getRaydiumSwapTx(quote, userPublicKey);
 
-    const jsonSwap = await swapResp.json();
-
-    if (!jsonSwap.swapTransaction) {
-      console.log("ERRO AO MONTAR TRANSAÇÃO:", jsonSwap);
-      return res
-        .status(500)
-        .json({ error: "Falha ao montar transação Jupiter." });
+    if (!txBase64) {
+      return res.status(500).json({ error: "Erro ao gerar transação Raydium." });
     }
 
-    // ============================================================
-    //  4) ASSINAR E ENVIAR TRANSAÇÃO PARA A REDE SOLANA
-    // ============================================================
-    const txBuffer = Buffer.from(jsonSwap.swapTransaction, "base64");
-    const transaction = VersionedTransaction.deserialize(txBuffer);
+    // 3. Converter, assinar e enviar
+    const txBuffer = Buffer.from(txBase64, "base64");
+    const transaction = Transaction.from(txBuffer);
 
-    transaction.sign([userKeypair]);
+    transaction.sign(userKeypair);
 
-    const signature = await connection.sendRawTransaction(
-      transaction.serialize(),
-      { skipPreflight: false }
-    );
-
-    console.log("TX SIGNATURE:", signature);
-
-    await connection.confirmTransaction(signature, "confirmed");
+    const sig = await sendAndConfirmTransaction(connection, transaction, [userKeypair]);
 
     return res.json({
       sucesso: true,
-      assinatura: signature,
+      assinatura: sig,
       direcao: direction,
       valor_recebido: quote.outAmount,
     });
+
   } catch (err) {
-    console.error("Erro no swap:", err);
-    return res.status(500).json({ error: "Erro ao realizar o swap." });
+    console.error("Erro no swap Raydium:", err);
+    res.status(500).json({ error: "Erro ao realizar o swap." });
   }
 });
 
