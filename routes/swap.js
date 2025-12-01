@@ -19,29 +19,23 @@ const bs58 = require("bs58");
 // ============================================================
 function toUint8Array(secretKey) {
   try {
-    // 1) Uint8Array direto
     if (secretKey instanceof Uint8Array) return secretKey;
 
-    // 2) Array real vindo do front
     if (Array.isArray(secretKey)) return Uint8Array.from(secretKey);
 
-    // 3) Objeto {0:12,1:55,...}
     if (typeof secretKey === "object" && secretKey !== null) {
       const values = Object.values(secretKey);
       if (values.length === 64) return Uint8Array.from(values);
     }
 
-    // 4) String JSON "[1,2,3]"
     if (typeof secretKey === "string" && secretKey.trim().startsWith("[")) {
       return Uint8Array.from(JSON.parse(secretKey));
     }
 
-    // 5) Base58 Phantom (somente caracteres base58)
     if (typeof secretKey === "string" && /^[1-9A-HJ-NP-Za-km-z]+$/.test(secretKey)) {
       return bs58.decode(secretKey);
     }
 
-    // 6) String "1,2,3"
     if (typeof secretKey === "string" && secretKey.includes(",")) {
       const arr = secretKey.split(",").map(n => Number(n.trim()));
       if (arr.length === 64) return Uint8Array.from(arr);
@@ -83,7 +77,7 @@ router.post("/usdc", async (req, res) => {
     console.log("PRIVATE RAW:", carteiraUsuarioPrivada);
     console.log("TYPE:", typeof carteiraUsuarioPrivada);
 
-    // Converter chave do usuário
+    // Converter chave
     const userUint8 = toUint8Array(carteiraUsuarioPrivada);
     const userKeypair = Keypair.fromSecretKey(userUint8);
     const userPublicKey = new PublicKey(carteiraUsuarioPublica);
@@ -94,20 +88,20 @@ router.post("/usdc", async (req, res) => {
     if (direction === "SOL_TO_USDC") {
       inputMint = SOL_MINT;
       outputMint = USDC_MINT;
-      amountAtomic = Math.floor(Number(amount) * 1e9); // SOL → lamports
+      amountAtomic = Math.floor(Number(amount) * 1e9);
     } else if (direction === "USDC_TO_SOL") {
       inputMint = USDC_MINT;
       outputMint = SOL_MINT;
-      amountAtomic = Math.floor(Number(amount) * 1e6); // USDC → micros
+      amountAtomic = Math.floor(Number(amount) * 1e6);
     } else {
       return res.status(400).json({ error: "Direção inválida." });
     }
 
     // ============================================================
-    //  2) OBTER COTAÇÃO VIA ENDPOINT ESTÁVEL + USER-AGENT
+    //  2) COTAÇÃO — usando endpoint estável da Jupiter (sem bloqueio)
     // ============================================================
     const quoteUrl =
-      `https://api.jup.ag/quote/v6?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountAtomic}`;
+      `https://public.jupiterapi.com/quote/v6?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountAtomic}`;
 
     const quoteResponse = await fetch(quoteUrl, {
       headers: {
@@ -124,9 +118,9 @@ router.post("/usdc", async (req, res) => {
     }
 
     // ============================================================
-    //  3) MONTAR TRANSAÇÃO VIA ENDPOINT ESTÁVEL + HEADERS
+    //  3) ENVIAR COTAÇÃO PARA GERAR TRANSAÇÃO
     // ============================================================
-    const swapResp = await fetch("https://api.jup.ag/swap/v6", {
+    const swapResp = await fetch("https://public.jupiterapi.com/swap/v6", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -150,7 +144,7 @@ router.post("/usdc", async (req, res) => {
     }
 
     // ============================================================
-    //  4) Assinar e enviar transação
+    //  4) ASSINAR E ENVIAR TRANSAÇÃO PARA A REDE SOLANA
     // ============================================================
     const txBuffer = Buffer.from(jsonSwap.swapTransaction, "base64");
     const transaction = VersionedTransaction.deserialize(txBuffer);
@@ -166,9 +160,6 @@ router.post("/usdc", async (req, res) => {
 
     await connection.confirmTransaction(signature, "confirmed");
 
-    // ============================================================
-    //  5) Retorno
-    // ============================================================
     return res.json({
       sucesso: true,
       assinatura: signature,
