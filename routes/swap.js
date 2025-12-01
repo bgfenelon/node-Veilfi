@@ -1,131 +1,127 @@
 // ========================
-//  Arquivo: swap.js
+//  swap.js — Jupiter SOL <-> USDC
 // ========================
 
 require("dotenv").config();
 const express = require("express");
 const router = express.Router();
-
 const {
-    Connection,
-    Keypair,
-    PublicKey,
-    Transaction,
-    SystemProgram,
-    LAMPORTS_PER_SOL,
-    sendAndConfirmTransaction,
+  Connection,
+  PublicKey,
+  Keypair,
+  VersionedTransaction,
 } = require("@solana/web3.js");
 
-const {
-    getOrCreateAssociatedTokenAccount,
-    transfer,
-} = require("@solana/spl-token");
-
-// ================================
-//   CONFIGURAÇÕES DO SISTEMA
-// ================================
+const USDC_MINT = "EPjFWdd5AufqSSqeM2q9HGnFz4Hh9ms4HjHpx2xJLxY";
+const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
 
-const plataformaPublicKey = new PublicKey(process.env.carteira_publica);
-const plataformaPrivateKey = Uint8Array.from(JSON.parse(process.env.carteira_privada));
-const plataformaKeypair = Keypair.fromSecretKey(plataformaPrivateKey);
+// =======================================
+//     ROTA ÚNICA DE SWAP
+// =======================================
+router.post("/usdc", async (req, res) => {
+  try {
+    const {
+      carteiraUsuarioPublica,
+      carteiraUsuarioPrivada,
+      amount,
+      direction,
+    } = req.body;
 
-const mintPump = new PublicKey(process.env.moedaCliente);
-
-// ==========================================
-//         ENDPOINT DO SWAP
-// ==========================================
-
-router.post("/buy", async (req, res) => {
-    try {
-        const { carteiraUsuarioPublica, carteiraUsuarioPrivada, amountSOL } = req.body;
-
-        if (!carteiraUsuarioPublica || !carteiraUsuarioPrivada || !amountSOL) {
-            return res.status(400).json({ error: "Dados incompletos." });
-        }
-
-        const quantidadeSol = parseFloat(amountSOL);
-        if (quantidadeSol <= 0) {
-            return res.status(400).json({ error: "Valor inválido." });
-        }
-
-        // ===========================
-        //   CARTEIRA DO USUÁRIO
-        // ===========================
-        const usuarioPublicKey = new PublicKey(carteiraUsuarioPublica);
-        const usuarioPrivateKey = Uint8Array.from(JSON.parse(carteiraUsuarioPrivada));
-        const usuarioKeypair = Keypair.fromSecretKey(usuarioPrivateKey);
-
-        // ===========================================================
-        //  1️⃣ ENVIAR SOL DO USUÁRIO → TESOURO
-        // ===========================================================
-
-        const transferirSolTx = new Transaction().add(
-            SystemProgram.transfer({
-                fromPubkey: usuarioPublicKey,
-                toPubkey: plataformaPublicKey,
-                lamports: quantidadeSol * LAMPORTS_PER_SOL,
-            })
-        );
-
-        const assinaturaSol = await sendAndConfirmTransaction(
-            connection,
-            transferirSolTx,
-            [usuarioKeypair]
-        );
-
-        // ===========================================================
-        //  2️⃣ CALCULAR TOKEN PUMP
-        // ===========================================================
-
-        const TAXA = 1000; // 1 SOL = 1000 PUMP (ajuste se quiser)
-        const quantidadePump = quantidadeSol * TAXA;
-
-        // ===========================================================
-        //  3️⃣ ENVIAR PUMP PARA O USUÁRIO
-        // ===========================================================
-
-        const ataTesouro = await getOrCreateAssociatedTokenAccount(
-            connection,
-            plataformaKeypair,
-            mintPump,
-            plataformaPublicKey
-        );
-
-        const ataUsuario = await getOrCreateAssociatedTokenAccount(
-            connection,
-            plataformaKeypair,
-            mintPump,
-            usuarioPublicKey
-        );
-
-        const assinaturaPump = await transfer(
-            connection,
-            plataformaKeypair,
-            ataTesouro.address,
-            ataUsuario.address,
-            plataformaKeypair.publicKey,
-            quantidadePump
-        );
-
-        // ===========================================================
-        //  FINALIZAÇÃO
-        // ===========================================================
-
-        return res.json({
-            sucesso: true,
-            mensagem: "Swap realizado com sucesso!",
-            sol_debitado: quantidadeSol,
-            pump_creditado: quantidadePump,
-            assinatura_saqueSOL: assinaturaSol,
-            assinatura_envioPUMP: assinaturaPump,
-        });
-
-    } catch (err) {
-        console.error("Erro no swap:", err);
-        return res.status(500).json({ error: "Erro ao realizar o swap." });
+    if (!carteiraUsuarioPublica || !carteiraUsuarioPrivada || !amount || !direction) {
+      return res.status(400).json({ error: "Dados incompletos." });
     }
+
+    // ----------------------------------
+    // 1) Carregar chave do usuário
+    // ----------------------------------
+    const userPublicKey = new PublicKey(carteiraUsuarioPublica);
+    const userPrivateKey = Uint8Array.from(JSON.parse(carteiraUsuarioPrivada));
+    const userKeypair = Keypair.fromSecretKey(userPrivateKey);
+
+    // ----------------------------------
+    // 2) Configurar direção
+    // ----------------------------------
+    let inputMint, outputMint, amountAtomic;
+
+    if (direction === "SOL_TO_USDC") {
+      inputMint = SOL_MINT;
+      outputMint = USDC_MINT;
+      amountAtomic = Math.floor(parseFloat(amount.replace(",", ".")) * 1e9);
+    } else if (direction === "USDC_TO_SOL") {
+      inputMint = USDC_MINT;
+      outputMint = SOL_MINT;
+      amountAtomic = Math.floor(parseFloat(amount.replace(",", ".")) * 1e6);
+    } else {
+      return res.status(400).json({ error: "Direção inválida." });
+    }
+
+    // ----------------------------------
+    // 3) Obter cotação Jupiter
+    // ----------------------------------
+    const quoteResponse = await fetch(
+      `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountAtomic}`
+    );
+
+    const quote = await quoteResponse.json();
+
+    if (!quote || !quote.outAmount) {
+      return res.status(500).json({ error: "Falha ao obter cotação." });
+    }
+
+    // ----------------------------------
+    // 4) Montar transação Jupiter
+    // ----------------------------------
+    const swapResp = await fetch("https://quote-api.jup.ag/v6/swap", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        quote,
+        userPublicKey: userPublicKey.toBase58(),
+        wrapAndUnwrapSol: true,
+      }),
+    });
+
+    const swapData = await swapResp.json();
+
+    if (!swapData.swapTransaction) {
+      console.error("SwapTransaction veio vazio:", swapData);
+      return res.status(500).json({ error: "Falha ao montar a transação Jupiter." });
+    }
+
+    // ----------------------------------
+    // 5) Assinar e enviar
+    // ----------------------------------
+    const txBuffer = Buffer.from(swapData.swapTransaction, "base64");
+    const transaction = VersionedTransaction.deserialize(txBuffer);
+
+    transaction.sign([userKeypair]);
+
+    const signature = await connection.sendRawTransaction(
+      transaction.serialize(),
+      { skipPreflight: false }
+    );
+
+    console.log("Assinatura do swap:", signature);
+
+    await connection.confirmTransaction(signature, "confirmed");
+
+    // ----------------------------------
+    // 6) Retornar ao front
+    // ----------------------------------
+    return res.json({
+      sucesso: true,
+      mensagem: "Swap realizado com sucesso!",
+      assinatura: signature,
+      direcao: direction,
+      valor_recebido: Number(quote.outAmount),
+    });
+
+  } catch (err) {
+    console.error("Erro no swap:", err);
+    return res.status(500).json({ error: "Erro ao realizar o swap." });
+  }
 });
 
 module.exports = router;
