@@ -1,5 +1,5 @@
 // ==========================================================
-//   swap.js — SOL <-> USDC (Raydium API v3)
+//   swap.js — Universal Swap (Jupiter Aggregator API)
 // ==========================================================
 
 require("dotenv").config();
@@ -16,7 +16,7 @@ const bs58 = require("bs58");
 const fetch = require("node-fetch");
 
 // ==========================================================
-// CONVERSOR UNIVERSAL DE CHAVE PRIVADA (base58 ou array)
+// Convert private key (base58 or JSON array)
 // ==========================================================
 function toUint8Array(secretKey) {
   try {
@@ -27,25 +27,17 @@ function toUint8Array(secretKey) {
     }
 
     if (typeof secretKey === "string" && secretKey.startsWith("[")) {
-      return Uint8Array.from(JSON.parse(secretKey)); // array JSON
+      return Uint8Array.from(JSON.parse(secretKey)); // JSON array
     }
 
-    if (Array.isArray(secretKey)) {
-      return Uint8Array.from(secretKey);
-    }
+    if (Array.isArray(secretKey)) return Uint8Array.from(secretKey);
 
     throw new Error("Formato desconhecido de secretKey.");
   } catch (err) {
-    console.error("Erro na conversão da chave privada:", err);
+    console.error("Erro convertendo chave:", err);
     throw new Error("Chave privada inválida.");
   }
 }
-
-// ==========================================================
-// TOKENS OFICIAIS
-// ==========================================================
-const SOL_MINT = "So11111111111111111111111111111111111111112";
-const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G3ky6a9qZ7bL92"; // ★ USDC OFICIAL
 
 // ==========================================================
 // RPC
@@ -56,102 +48,96 @@ const connection = new Connection(
 );
 
 // ==========================================================
-//     SWAP RAYDIUM — SOL <-> USDC
+//  UNIVERSAL SWAP VIA JUPITER
 // ==========================================================
-router.post("/usdc", async (req, res) => {
+router.post("/jupiter", async (req, res) => {
   try {
-    console.log("=== RAYDIUM SWAP USDC ===");
+    console.log("=== JUPITER SWAP REQUEST ===");
 
     const {
       carteiraUsuarioPublica,
       carteiraUsuarioPrivada,
       amount,
-      direction,
+      inputMint,
+      outputMint,
     } = req.body;
 
-    if (!carteiraUsuarioPublica || !carteiraUsuarioPrivada || !amount || !direction) {
+    if (!carteiraUsuarioPublica || !carteiraUsuarioPrivada || !amount) {
       return res.status(400).json({ error: "Dados incompletos." });
     }
 
-    // Converter chave privada
+    const userPubkey = new PublicKey(carteiraUsuarioPublica.trim());
     const privateKeyArray = toUint8Array(carteiraUsuarioPrivada);
     const userKeypair = Keypair.fromSecretKey(privateKeyArray);
-    const userPubkey = new PublicKey(carteiraUsuarioPublica.trim());
 
-    // Definir mints
-    let inputMint, outputMint, atomicAmount;
-
-    if (direction === "SOL_TO_USDC") {
-      inputMint = SOL_MINT;
-      outputMint = USDC_MINT;
-      atomicAmount = Math.floor(parseFloat(amount) * 1e9); // SOL decimais = 9
-
-    } else if (direction === "USDC_TO_SOL") {
-      inputMint = USDC_MINT;
-      outputMint = SOL_MINT;
-      atomicAmount = Math.floor(parseFloat(amount) * 1e6); // USDC decimais = 6
-
-    } else {
-      return res.status(400).json({ error: "Direção inválida." });
-    }
+    console.log("Input Mint:", inputMint);
+    console.log("Output Mint:", outputMint);
+    console.log("Amount:", amount);
 
     // ==========================================================
-    // 1 — RAYDIUM QUOTE v3
+    // 1 — GET QUOTE (Jupiter API)
     // ==========================================================
-    const quoteUrl = `https://api.raydium.io/v3/amm/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${atomicAmount}`;
+    const quoteUrl =
+      `https://quote-api.jup.ag/v6/quote?` +
+      `inputMint=${inputMint}&` +
+      `outputMint=${outputMint}&` +
+      `amount=${amount}&` +
+      `slippageBps=50`; // 0.5%
 
-    console.log("Quote URL:", quoteUrl);
+    console.log("QUOTE URL:", quoteUrl);
 
-    const quoteResp = await fetch(quoteUrl);
-    const quoteJson = await quoteResp.json();
+    const quoteResponse = await fetch(quoteUrl);
+    const quote = await quoteResponse.json();
 
-    console.log("QUOTE RAW:", quoteJson);
+    console.log("JUPITER QUOTE RAW:", quote);
 
-    if (!quoteJson.outAmount) {
+    if (!quote || !quote.routePlan) {
       return res.status(500).json({
-        error: "Raydium não retornou cotação.",
-        details: quoteJson,
+        error: "Jupiter não retornou rota válida.",
+        details: quote,
       });
     }
 
     // ==========================================================
-    // 2 — OBTER TRANSAÇÃO (Raydium Swap Builder)
+    // 2 — GET SWAP TRANSACTION
     // ==========================================================
-    const swapResp = await fetch("https://api.raydium.io/v2/sdk/amm/swap", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        inputMint,
-        outputMint,
-        amount: atomicAmount,
-        publicKey: userPubkey.toBase58(),
-      }),
-    });
+    const swapResponse = await fetch(
+      "https://quote-api.jup.ag/v6/swap-instructions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          quoteResponse: quote,
+          userPublicKey: userPubkey.toBase58(),
+          wrapAndUnwrapSol: true,
+        }),
+      }
+    );
 
-    const swapJson = await swapResp.json();
+    const swapJson = await swapResponse.json();
 
-    console.log("SWAP RAW:", swapJson);
+    console.log("SWAP INSTRUCTIONS RAW:", swapJson);
 
     if (!swapJson.swapTransaction) {
       return res.status(500).json({
-        error: "Raydium não retornou transação de swap.",
+        error: "Jupiter não retornou transação de swap.",
         details: swapJson,
       });
     }
 
     // ==========================================================
-    // 3 — ASSINAR TRANSAÇÃO
+    // 3 — ASSINAR & ENVIAR TRANSAÇÃO
     // ==========================================================
-    const txBuffer = Buffer.from(swapJson.swapTransaction, "base64");
-    const tx = VersionedTransaction.deserialize(txBuffer);
+    const swapTxBuf = Buffer.from(swapJson.swapTransaction, "base64");
+    const transaction = VersionedTransaction.deserialize(swapTxBuf);
 
-    tx.sign([userKeypair]);
+    transaction.sign([userKeypair]);
 
-    const signature = await connection.sendRawTransaction(tx.serialize(), {
-      skipPreflight: false,
-    });
+    const signature = await connection.sendRawTransaction(
+      transaction.serialize()
+    );
 
-    console.log("ASSINATURA:", signature);
+    console.log("Tx Signature:", signature);
 
     await connection.confirmTransaction(signature, "confirmed");
 
@@ -161,14 +147,13 @@ router.post("/usdc", async (req, res) => {
     return res.json({
       sucesso: true,
       assinatura: signature,
-      recebido: quoteJson.outAmount,
-      direction,
+      quote: quote.outAmount,
     });
 
   } catch (err) {
-    console.error("ERRO NO SWAP USDC:", err);
+    console.error("ERRO NO JUPITER SWAP:", err);
     return res.status(500).json({
-      error: "Erro no swap.",
+      error: "Erro ao executar swap.",
       details: err.message,
     });
   }
