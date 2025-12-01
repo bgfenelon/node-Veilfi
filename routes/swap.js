@@ -1,5 +1,5 @@
 // ========================
-//  swap.js — Jupiter SOL <-> USDC
+//  swap.js — Jupiter SOL <-> USDC (Render Stable Version)
 // ========================
 
 require("dotenv").config();
@@ -16,39 +16,27 @@ const bs58 = require("bs58");
 
 // ============================================================
 //  🔥 Função DEFINITIVA para aceitar QUALQUER tipo de secretKey
-//     - array real
-//     - objeto {0:1,1:2}
-//     - string JSON "[...]"
-//     - string "1,2,3"
-//     - base58 Phantom "3xhG...."
 // ============================================================
 function toUint8Array(secretKey) {
   try {
-    // 1) Se já for Uint8Array
-    if (secretKey instanceof Uint8Array) {
-      return secretKey;
-    }
+    // 1) Uint8Array
+    if (secretKey instanceof Uint8Array) return secretKey;
 
-    // 2) Array real (vindo certo do front)
-    if (Array.isArray(secretKey)) {
-      return Uint8Array.from(secretKey);
-    }
+    // 2) Array real vindo do front
+    if (Array.isArray(secretKey)) return Uint8Array.from(secretKey);
 
     // 3) Objeto {0:12,1:55,...}
     if (typeof secretKey === "object" && secretKey !== null) {
       const values = Object.values(secretKey);
-      if (values.length === 64) {
-        return Uint8Array.from(values);
-      }
+      if (values.length === 64) return Uint8Array.from(values);
     }
 
-    // 4) String JSON: "[1,2,3]"
+    // 4) String JSON "[1,2,3]"
     if (typeof secretKey === "string" && secretKey.trim().startsWith("[")) {
-      const arr = JSON.parse(secretKey);
-      return Uint8Array.from(arr);
+      return Uint8Array.from(JSON.parse(secretKey));
     }
 
-    // 5) Base58 Phantom (somente letras de base58)
+    // 5) Base58 Phantom
     if (typeof secretKey === "string" && /^[1-9A-HJ-NP-Za-km-z]+$/.test(secretKey)) {
       return bs58.decode(secretKey);
     }
@@ -56,9 +44,7 @@ function toUint8Array(secretKey) {
     // 6) String "1,2,3"
     if (typeof secretKey === "string" && secretKey.includes(",")) {
       const arr = secretKey.split(",").map(n => Number(n.trim()));
-      if (arr.length === 64) {
-        return Uint8Array.from(arr);
-      }
+      if (arr.length === 64) return Uint8Array.from(arr);
     }
 
     throw new Error("Formato de secretKey inválido.");
@@ -69,7 +55,7 @@ function toUint8Array(secretKey) {
 }
 
 // ============================================================
-//  Configurações
+//  Config
 // ============================================================
 const USDC_MINT = "EPjFWdd5AufqSSqeM2q9HGnFz4Hh9ms4HjHpx2xJLxY";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
@@ -88,9 +74,6 @@ router.post("/usdc", async (req, res) => {
       direction,
     } = req.body;
 
-    // ======================================
-    //  VALIDAÇÕES INICIAIS
-    // ======================================
     if (!carteiraUsuarioPublica || !carteiraUsuarioPrivada || !amount || !direction) {
       return res.status(400).json({ error: "Dados incompletos." });
     }
@@ -103,12 +86,9 @@ router.post("/usdc", async (req, res) => {
     // Converter chave
     const userUint8 = toUint8Array(carteiraUsuarioPrivada);
     const userKeypair = Keypair.fromSecretKey(userUint8);
-
     const userPublicKey = new PublicKey(carteiraUsuarioPublica);
 
-    // ======================================
-    //  CONFIG DA DIREÇÃO
-    // ======================================
+    // 1) Direção
     let inputMint, outputMint, amountAtomic;
 
     if (direction === "SOL_TO_USDC") {
@@ -123,24 +103,24 @@ router.post("/usdc", async (req, res) => {
       return res.status(400).json({ error: "Direção inválida." });
     }
 
-    // ======================================
-    //  1) Obter cotação Jupiter
-    // ======================================
-    const quoteResponse = await fetch(
-      `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountAtomic}`
-    );
+    // ============================================================
+    //  2) Obter cotação Jupiter (ENDPOINT ESTÁVEL PARA RENDER)
+    // ============================================================
+    const quoteUrl =
+      `https://api.jup.ag/quote/v6?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountAtomic}`;
 
+    const quoteResponse = await fetch(quoteUrl);
     const quote = await quoteResponse.json();
 
     if (!quote.outAmount) {
-      console.log("ERRO: Cotação inválida:", quote);
+      console.log("ERRO AO OBTER COTAÇÃO:", quote);
       return res.status(500).json({ error: "Falha ao obter cotação Jupiter." });
     }
 
-    // ======================================
-    //  2) Montar a transação
-    // ======================================
-    const swapResp = await fetch("https://quote-api.jup.ag/v6/swap", {
+    // ============================================================
+    //  3) Montar transação (ENDPOINT ESTÁVEL)
+    // ============================================================
+    const swapResp = await fetch("https://api.jup.ag/swap/v6", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -153,36 +133,38 @@ router.post("/usdc", async (req, res) => {
     const jsonSwap = await swapResp.json();
 
     if (!jsonSwap.swapTransaction) {
-      console.log("ERRO AO MONTAR TX:", jsonSwap);
-      return res.status(500).json({ error: "Falha ao montar transação Jupiter." });
+      console.log("ERRO AO MONTAR TRANSAÇÃO:", jsonSwap);
+      return res
+        .status(500)
+        .json({ error: "Falha ao montar transação Jupiter." });
     }
 
-    // ======================================
-    //  3) Assinar e enviar TX
-    // ======================================
+    // ============================================================
+    //  4) Deserializar, assinar e enviar
+    // ============================================================
     const txBuffer = Buffer.from(jsonSwap.swapTransaction, "base64");
     const transaction = VersionedTransaction.deserialize(txBuffer);
 
     transaction.sign([userKeypair]);
 
-    const signature = await connection.sendRawTransaction(transaction.serialize(), {
-      skipPreflight: false,
-    });
+    const signature = await connection.sendRawTransaction(
+      transaction.serialize(),
+      { skipPreflight: false }
+    );
 
     console.log("TX SIGNATURE:", signature);
 
     await connection.confirmTransaction(signature, "confirmed");
 
-    // ======================================
-    //  4) Retorno
-    // ======================================
+    // ============================================================
+    //  5) Resposta
+    // ============================================================
     return res.json({
       sucesso: true,
       assinatura: signature,
       direcao: direction,
       valor_recebido: quote.outAmount,
     });
-
   } catch (err) {
     console.error("Erro no swap:", err);
     return res.status(500).json({ error: "Erro ao realizar o swap." });
