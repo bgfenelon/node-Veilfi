@@ -13,20 +13,21 @@ const {
 } = require("@solana/web3.js");
 
 const bs58 = require("bs58");
+const fetch = require("node-fetch");
 
 // ================================
-// Função universal para converter secretKey
+// Função universal para converter secretKey (string base58 ou array)
 // ================================
 function toUint8Array(secretKey) {
   try {
     if (!secretKey) throw new Error("SecretKey vazia.");
 
-    // Base58 (começa com 3xhGX... etc)
+    // Base58
     if (typeof secretKey === "string" && !secretKey.startsWith("[")) {
       return bs58.decode(secretKey);
     }
 
-    // Array em string "[1,2,3]"
+    // Array JSON
     if (typeof secretKey === "string" && secretKey.startsWith("[")) {
       return Uint8Array.from(JSON.parse(secretKey));
     }
@@ -36,15 +37,10 @@ function toUint8Array(secretKey) {
       return Uint8Array.from(secretKey);
     }
 
-    // Uint8Array direto
-    if (secretKey instanceof Uint8Array) {
-      return secretKey;
-    }
-
-    throw new Error("Formato desconhecido.");
+    throw new Error("Formato de chave desconhecido.");
   } catch (err) {
-    console.error("ERRO CONVERSÃO DE CHAVE:", err);
-    throw new Error("SecretKey inválida.");
+    console.error("ERRO convertendo secretKey:", err);
+    throw new Error("Chave privada inválida.");
   }
 }
 
@@ -52,7 +48,7 @@ function toUint8Array(secretKey) {
 // TOKENS OFICIAIS
 // ================================
 const SOL_MINT = "So11111111111111111111111111111111111111112";
-const USDT_MINT = "Es9vMFrzaCERyN2Rrj8qJeT2orGZf4d2Lr8DQJHuhJZ";
+const USDT_MINT = "Es9vMFrzaCERyN2rj8qJea2orGZf4d2Lr8DQJHuhJZ";
 
 // ================================
 // RPC
@@ -63,11 +59,11 @@ const connection = new Connection(
 );
 
 // ================================
-// SWAP RAYDIUM — SOL <-> USDT
+// SWAP RAYDIUM — v3 API
 // ================================
 router.post("/usdt", async (req, res) => {
   try {
-    console.log("=== RAYDIUM SWAP TEST ===");
+    console.log("=== RAYDIUM SWAP REQUEST ===");
 
     const {
       carteiraUsuarioPublica,
@@ -77,18 +73,20 @@ router.post("/usdt", async (req, res) => {
     } = req.body;
 
     console.log("Public:", carteiraUsuarioPublica);
-    console.log("PRIVATE RAW:", carteiraUsuarioPrivada);
+    console.log("Private (base58):", carteiraUsuarioPrivada);
+    console.log("Amount:", amount);
+    console.log("Direction:", direction);
 
     if (!carteiraUsuarioPublica || !carteiraUsuarioPrivada || !amount || !direction) {
       return res.status(400).json({ error: "Dados incompletos." });
     }
 
-    // Converter a chave privada
+    // Converter privateKey
     const privateKeyArray = toUint8Array(carteiraUsuarioPrivada);
     const userKeypair = Keypair.fromSecretKey(privateKeyArray);
-    const userPk = new PublicKey(carteiraUsuarioPublica);
+    const userPubkey = new PublicKey(carteiraUsuarioPublica);
 
-    // Definir par do swap
+    // Definir mints
     let inputMint, outputMint, atomicAmount;
 
     if (direction === "SOL_TO_USDT") {
@@ -105,17 +103,17 @@ router.post("/usdt", async (req, res) => {
       return res.status(400).json({ error: "Direção inválida." });
     }
 
-    // ----------------------------
-    // 1) Pedir cotação para Raydium
-    // ----------------------------
-    const quoteUrl = `https://api.raydium.io/v2/sdk/amm/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${atomicAmount}`;
+    // ========================================
+    // 1) RAYDIUM QUOTE (v3)
+    // ========================================
+    const quoteUrl = `https://api.raydium.io/v3/amm/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${atomicAmount}`;
 
-    console.log("Raydium Quote URL:", quoteUrl);
+    console.log("Quote URL:", quoteUrl);
 
     const quoteResp = await fetch(quoteUrl);
     const quoteJson = await quoteResp.json();
 
-    console.log("Raydium Quote Response:", quoteJson);
+    console.log("QUOTE RESPONSE RAW:", quoteJson);
 
     if (!quoteJson.outAmount) {
       return res.status(500).json({
@@ -124,9 +122,9 @@ router.post("/usdt", async (req, res) => {
       });
     }
 
-    // ----------------------------
-    // 2) Obter transação assinável
-    // ----------------------------
+    // ========================================
+    // 2) OBTER TRANSAÇÃO DE SWAP
+    // ========================================
     const swapResp = await fetch("https://api.raydium.io/v2/sdk/amm/swap", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -134,24 +132,24 @@ router.post("/usdt", async (req, res) => {
         inputMint,
         outputMint,
         amount: atomicAmount,
-        publicKey: userPk.toBase58(),
+        publicKey: userPubkey.toBase58(),
       }),
     });
 
     const swapJson = await swapResp.json();
 
-    console.log("Raydium Swap Response:", swapJson);
+    console.log("SWAP RESPONSE RAW:", swapJson);
 
     if (!swapJson.swapTransaction) {
       return res.status(500).json({
-        error: "Raydium não retornou transação.",
+        error: "Raydium não retornou transação de swap.",
         details: swapJson,
       });
     }
 
-    // ----------------------------
-    // 3) Assinar e enviar
-    // ----------------------------
+    // ========================================
+    // 3) ASSINAR TRANSAÇÃO
+    // ========================================
     const txBuffer = Buffer.from(swapJson.swapTransaction, "base64");
     const tx = VersionedTransaction.deserialize(txBuffer);
 
@@ -161,13 +159,13 @@ router.post("/usdt", async (req, res) => {
       skipPreflight: false,
     });
 
-    console.log("Swap Signature:", signature);
+    console.log("ASSINATURA:", signature);
 
     await connection.confirmTransaction(signature, "confirmed");
 
-    // ----------------------------
-    // 4) Retorno
-    // ----------------------------
+    // ========================================
+    // 4) SUCESSO
+    // ========================================
     return res.json({
       sucesso: true,
       assinatura: signature,
@@ -176,8 +174,11 @@ router.post("/usdt", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Erro no swap:", err);
-    return res.status(500).json({ error: "Erro no swap.", details: err.message });
+    console.error("ERRO NO SWAP:", err);
+    return res.status(500).json({
+      error: "Erro no swap.",
+      details: err.message,
+    });
   }
 });
 
