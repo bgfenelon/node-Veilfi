@@ -22,6 +22,7 @@ const connection = new Connection("https://api.mainnet-beta.solana.com", "confir
 // ========================================================
 function parsePrivateKey(raw) {
   try {
+    // Tenta decodificar como base58
     return Keypair.fromSecretKey(bs58.decode(raw));
   } catch (err) {
     throw new Error("Chave privada inválida (não é base58)");
@@ -42,18 +43,18 @@ router.post("/jupiter", async (req, res) => {
     // 1) Escolher mints (SOL <-> USDC)
     // --------------------------------------------------------
     const SOL = "So11111111111111111111111111111111111111112";
-    const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G3ky6a9qZ7bL92";
+    const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
     let inputMint, outputMint, lamports;
 
     if (direction === "SOL_TO_USDC") {
       inputMint = SOL;
       outputMint = USDC;
-      lamports = Math.floor(Number(amount) * 1e9);
+      lamports = Math.floor(Number(amount) * 1e9); // SOL tem 9 decimais
     } else if (direction === "USDC_TO_SOL") {
       inputMint = USDC;
       outputMint = SOL;
-      lamports = Math.floor(Number(amount) * 1e6);
+      lamports = Math.floor(Number(amount) * 1e6); // USDC tem 6 decimais
     } else {
       return res.status(400).json({ error: "Direção inválida." });
     }
@@ -66,8 +67,7 @@ router.post("/jupiter", async (req, res) => {
     // --------------------------------------------------------
     // 2) QUOTE
     // --------------------------------------------------------
-    const quoteUrl =
-      `https://public.jupiterapi.com/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${lamports}`;
+    const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${lamports}&slippageBps=50`;
 
     const quoteRes = await fetch(quoteUrl);
     const quoteJson = await quoteRes.json();
@@ -82,12 +82,16 @@ router.post("/jupiter", async (req, res) => {
     // --------------------------------------------------------
     // 3) PEGAR TRANSAÇÃO PRONTA
     // --------------------------------------------------------
-    const swapRes = await fetch("https://public.jupiterapi.com/swap-instructions", {
+    const swapRes = await fetch("https://quote-api.jup.ag/v6/swap", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({
         quoteResponse: quoteJson,
         userPublicKey: carteiraUsuarioPublica,
+        wrapAndUnwrapSol: true,
+        dynamicComputeUnitLimit: true, // Ajusta automaticamente o limite de unidades de computação
       }),
     });
 
@@ -112,9 +116,14 @@ router.post("/jupiter", async (req, res) => {
 
     const signature = await connection.sendRawTransaction(tx.serialize(), {
       skipPreflight: false,
+      preflightCommitment: "confirmed",
     });
 
     console.log("Swap Signature:", signature);
+
+    // Aguardar confirmação
+    const confirmation = await connection.confirmTransaction(signature, "confirmed");
+    console.log("Confirmação:", confirmation);
 
     return res.json({
       sucesso: true,

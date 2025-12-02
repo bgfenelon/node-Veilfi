@@ -7,6 +7,7 @@
     "migrate": "node run_migrations.js"
   },
   "dependencies": {
+    "@jup-ag/api": "^6.0.47",
     "@scure/base": "^2.0.0",
     "@solana/spl-token": "^0.3.11",
     "@solana/web3.js": "^1.98.4",
