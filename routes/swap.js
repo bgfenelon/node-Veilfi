@@ -1,10 +1,8 @@
-// swap.js – Jupiter v6 – SOL <-> USDC
-// -------------------------------------
-
+// ========================================================
+//  Jupiter Swap (Public API) — NO API KEY NEEDED
+// ========================================================
 const express = require("express");
 const router = express.Router();
-const fetch = require("node-fetch");
-const bs58 = require("bs58");
 
 const {
   Connection,
@@ -13,162 +11,125 @@ const {
   VersionedTransaction,
 } = require("@solana/web3.js");
 
-// -------------------------------------
-// ENV + RPC
-// -------------------------------------
-const RPC_URL =
-  process.env.RPC_URL ||
-  "https://mainnet.helius-rpc.com/?api-key=1581ae46-832d-4d46-bc0c-007c6269d2d9";
+const bs58 = require("bs58");
+const fetch = require("node-fetch");
 
-const JUP_API_KEY = process.env.JUP_API_KEY;
+// Solana RPC
+const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
 
-if (!JUP_API_KEY) {
-  console.error("❌ FALTA JUP_API_KEY no Render Environment!");
-}
-
-const connection = new Connection(RPC_URL, "confirmed");
-
-// -------------------------------------
-// Jupiter endpoints
-// -------------------------------------
-const JUP_QUOTE_URL = "https://api.jup.ag/quote";
-const JUP_SWAP_URL = "https://api.jup.ag/swap";
-
-// -------------------------------------
-// Mints
-// -------------------------------------
-const SOL_MINT = "So11111111111111111111111111111111111111112"; // WSOL
-const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G3ky6a9qZ7bL92"; // mainnet USDC
-
-// -------------------------------------
-// Convert secret key (array, json ou base58)
-// -------------------------------------
-function parseSecretKey(secretKey) {
-  if (!secretKey) throw new Error("Missing secretKey.");
-
-  if (Array.isArray(secretKey))
-    return Keypair.fromSecretKey(Uint8Array.from(secretKey));
-
-  if (secretKey.trim().startsWith("[")) {
-    return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(secretKey)));
+// ========================================================
+//  Converte secret key (base58)
+// ========================================================
+function parsePrivateKey(raw) {
+  try {
+    return Keypair.fromSecretKey(bs58.decode(raw));
+  } catch (err) {
+    throw new Error("Chave privada inválida (não é base58)");
   }
-
-  return Keypair.fromSecretKey(bs58.decode(secretKey));
 }
 
-// -------------------------------------
-// Main swap route
-// -------------------------------------
+// ========================================================
+//  SWAP via Jupiter PUBLIC API
+// ========================================================
 router.post("/jupiter", async (req, res) => {
   try {
-    const { carteiraUsuarioPublica, carteiraUsuarioPrivada, amount, direction } =
-      req.body;
+    const { carteiraUsuarioPublica, carteiraUsuarioPrivada, amount, direction } = req.body;
 
-    if (!carteiraUsuarioPublica || !carteiraUsuarioPrivada || !amount || !direction) {
-      return res.status(400).json({ error: "Missing fields" });
-    }
+    if (!carteiraUsuarioPublica) return res.status(400).json({ error: "Falta walletAddress" });
+    if (!carteiraUsuarioPrivada) return res.status(400).json({ error: "Falta privateKey" });
 
-    const userPubkey = new PublicKey(carteiraUsuarioPublica);
-    const userKeypair = parseSecretKey(carteiraUsuarioPrivada);
+    // --------------------------------------------------------
+    // 1) Escolher mints (SOL <-> USDC)
+    // --------------------------------------------------------
+    const SOL = "So11111111111111111111111111111111111111112";
+    const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G3ky6a9qZ7bL92";
 
-    // ----------------------------------
-    // SELECT MINTS
-    // ----------------------------------
-    let inputMint, outputMint, atomicAmount;
+    let inputMint, outputMint, lamports;
 
     if (direction === "SOL_TO_USDC") {
-      inputMint = SOL_MINT;
-      outputMint = USDC_MINT;
-      atomicAmount = Math.floor(Number(amount) * 1e9);
+      inputMint = SOL;
+      outputMint = USDC;
+      lamports = Math.floor(Number(amount) * 1e9);
     } else if (direction === "USDC_TO_SOL") {
-      inputMint = USDC_MINT;
-      outputMint = SOL_MINT;
-      atomicAmount = Math.floor(Number(amount) * 1e6);
+      inputMint = USDC;
+      outputMint = SOL;
+      lamports = Math.floor(Number(amount) * 1e6);
     } else {
-      return res.status(400).json({ error: "Invalid direction" });
+      return res.status(400).json({ error: "Direção inválida." });
     }
 
-    // ----------------------------------
-    // 1) GET QUOTE
-    // ----------------------------------
+    console.log("=== JUPITER SWAP REQUEST ===");
+    console.log("Input:", inputMint);
+    console.log("Output:", outputMint);
+    console.log("Amount:", lamports);
+
+    // --------------------------------------------------------
+    // 2) QUOTE
+    // --------------------------------------------------------
     const quoteUrl =
-      `${JUP_QUOTE_URL}?inputMint=${inputMint}` +
-      `&outputMint=${outputMint}&amount=${atomicAmount}&slippageBps=50`;
+      `https://public.jupiterapi.com/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${lamports}`;
 
-    const quoteResp = await fetch(quoteUrl, {
-      headers: {
-        "JUPITER-API-KEY": JUP_API_KEY,
-      },
-    });
+    const quoteRes = await fetch(quoteUrl);
+    const quoteJson = await quoteRes.json();
 
-    if (!quoteResp.ok) {
-      return res.status(400).json({
+    if (!quoteJson.outAmount) {
+      return res.status(500).json({
         error: "Jupiter quote failed",
-        status: quoteResp.status,
-        body: await quoteResp.text(),
+        details: quoteJson,
       });
     }
 
-    const quoteJson = await quoteResp.json();
-
-    if (!quoteJson || !quoteJson.routePlan) {
-      return res.status(400).json({ error: "No route found" });
-    }
-
-    // ----------------------------------
-    // 2) BUILD SWAP TRANSACTION
-    // ----------------------------------
-    const swapResp = await fetch(JUP_SWAP_URL, {
+    // --------------------------------------------------------
+    // 3) PEGAR TRANSAÇÃO PRONTA
+    // --------------------------------------------------------
+    const swapRes = await fetch("https://public.jupiterapi.com/swap-instructions", {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "JUPITER-API-KEY": JUP_API_KEY,
-      },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({
         quoteResponse: quoteJson,
-        userPublicKey: userPubkey.toBase58(),
-        wrapAndUnwrapSol: true,
+        userPublicKey: carteiraUsuarioPublica,
       }),
     });
 
-    if (!swapResp.ok) {
-      return res.status(400).json({
-        error: "Failed to build swap transaction",
-        status: swapResp.status,
-        body: await swapResp.text(),
+    const swapJson = await swapRes.json();
+
+    if (!swapJson.swapTransaction) {
+      return res.status(500).json({
+        error: "Swap instructions inválidas",
+        details: swapJson,
       });
     }
 
-    const swapJson = await swapResp.json();
+    // --------------------------------------------------------
+    // 4) ASSINAR E ENVIAR
+    // --------------------------------------------------------
+    const userKeypair = parsePrivateKey(carteiraUsuarioPrivada);
 
-    if (!swapJson.swapTransaction) {
-      return res.status(400).json({ error: "Missing transaction", details: swapJson });
-    }
-
-    // ----------------------------------
-    // 3) SIGN TRANSACTION
-    // ----------------------------------
     const txBuffer = Buffer.from(swapJson.swapTransaction, "base64");
     const tx = VersionedTransaction.deserialize(txBuffer);
+
     tx.sign([userKeypair]);
 
-    // ----------------------------------
-    // 4) SEND TO BLOCKCHAIN
-    // ----------------------------------
     const signature = await connection.sendRawTransaction(tx.serialize(), {
       skipPreflight: false,
     });
 
-    await connection.confirmTransaction(signature, "confirmed");
+    console.log("Swap Signature:", signature);
 
     return res.json({
-      success: true,
+      sucesso: true,
       signature,
-      receivedAmount: quoteJson.outAmount,
+      direction,
+      amount,
+      received: quoteJson.outAmount,
     });
+
   } catch (err) {
-    console.error("SWAP ERROR:", err);
-    return res.status(500).json({ error: err.message });
+    console.error("JUPITER SWAP ERROR:", err);
+    return res.status(500).json({
+      error: "Erro ao executar swap.",
+      details: err.message,
+    });
   }
 });
 
