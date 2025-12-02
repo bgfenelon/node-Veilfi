@@ -14,14 +14,14 @@ const {
 
 const bs58 = require("bs58");
 
-// RPC normal
+// RPC
 const connection = new Connection(
   "https://api.mainnet-beta.solana.com",
   "confirmed"
 );
 
 // =============================================================
-// Converte base58 -> Keypair (sem crashes)
+// Converte base58 -> Keypair
 // =============================================================
 function parsePrivateKey(raw) {
   try {
@@ -34,45 +34,48 @@ function parsePrivateKey(raw) {
 }
 
 // =============================================================
-//  SWAP Jupiter (Public API) — 100% compatível Render
+//  SWAP Jupiter (Public API)
 // =============================================================
 router.post("/jupiter", async (req, res) => {
   try {
     const {
-      carteiraUsuarioPublica,
+      carteiraUsuarioPublica,       // ✔ corrigido!
       carteiraUsuarioPrivada,
       amount,
       direction,
     } = req.body;
 
-    if (!carteiraUsuarioPublicica || !carteiraUsuarioPrivada) {
-      return res.status(400).json({ error: "Dados incompletos." });
-    }
+    if (!carteiraUsuarioPublica)
+      return res.status(400).json({ error: "Falta carteiraUsuarioPublica" });
+    if (!carteiraUsuarioPrivada)
+      return res.status(400).json({ error: "Falta carteiraUsuarioPrivada" });
 
     // Tokens oficiais
-    const SOL = "So11111111111111111111111111111111111111112";
-    const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G3ky6a9qZ7bL92";
+    const SOL =
+      "So11111111111111111111111111111111111111112";
+    const USDC =
+      "EPjFWdd5AufqSSqeM2qN1xzybapC8G3ky6a9qZ7bL92";
 
     let inputMint, outputMint, atomicAmount;
 
     if (direction === "SOL_TO_USDC") {
       inputMint = SOL;
       outputMint = USDC;
-      atomicAmount = Math.floor(amount * 1e9);
+      atomicAmount = Math.floor(Number(amount) * 1e9);
     } else if (direction === "USDC_TO_SOL") {
       inputMint = USDC;
       outputMint = SOL;
-      atomicAmount = Math.floor(amount * 1e6);
+      atomicAmount = Math.floor(Number(amount) * 1e6);
     } else {
       return res.status(400).json({ error: "Direção inválida." });
     }
 
     // ============================================================
-    // 1) QUOTE Jupiter Public API
+    // 1) QUOTE Jupiter API pública
     // ============================================================
     const quoteUrl =
-      `https://public.jupiterapi.com/quote?inputMint=${inputMint}` +
-      `&outputMint=${outputMint}&amount=${atomicAmount}`;
+      `https://public.jupiterapi.com/quote?` +
+      `inputMint=${inputMint}&outputMint=${outputMint}&amount=${atomicAmount}`;
 
     const quoteRes = await fetch(quoteUrl);
     const quoteJson = await quoteRes.json();
@@ -119,19 +122,19 @@ router.post("/jupiter", async (req, res) => {
     tx.sign([keypair]);
 
     // ============================================================
-    // 4) Enviar
+    // 4) Enviar transação
     // ============================================================
-    const sig = await connection.sendRawTransaction(tx.serialize(), {
+    const signature = await connection.sendRawTransaction(tx.serialize(), {
       skipPreflight: false,
     });
 
-    await connection.confirmTransaction(sig, "confirmed");
+    await connection.confirmTransaction(signature, "confirmed");
 
     return res.json({
       sucesso: true,
-      signature: sig,
+      signature,
       direction,
-      amount,
+      sent: amount,
       received: quoteJson.outAmount,
     });
 
