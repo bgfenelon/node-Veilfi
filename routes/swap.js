@@ -66,11 +66,7 @@ function parsePrivateKey(secretKey) {
 // SWAP
 router.post("/jupiter", async (req, res) => {
   try {
-    console.log("=== SWAP REQUEST ===", {
-      wallet: req.body.carteiraUsuarioPublica?.substring(0, 8) + "...",
-      direction: req.body.direction,
-      amount: req.body.amount
-    });
+    // Log request summary (some fields moved after destructuring)
     
     const { 
       carteiraUsuarioPublica, 
@@ -78,6 +74,56 @@ router.post("/jupiter", async (req, res) => {
       amount, 
       direction 
     } = req.body;
+
+    // Mask private key before logging (after destructuring to avoid ReferenceError)
+    const maskedPriv = carteiraUsuarioPrivada ? ("***" + carteiraUsuarioPrivada.slice(-8)) : undefined;
+    const debugBody = {
+      ...req.body,
+      carteiraUsuarioPrivada: maskedPriv || req.body.carteiraUsuarioPrivada
+    };
+
+    console.log("=== SWAP REQUEST ===", {
+      wallet: carteiraUsuarioPublica?.substring(0, 8) + "...",
+      direction: req.body.direction,
+      amount: req.body.amount,
+      privateKey: maskedPriv,
+      from: req.body.from || req.body.fromSymbol || req.body.fromMint || req.body.inputMint,
+      to: req.body.to || req.body.toSymbol || req.body.toMint || req.body.outputMint,
+      additionalFields: Object.keys(req.body).filter(k => ['carteiraUsuarioPrivada', 'SITE_SECRET_KEY', 'siteSecretKey'].indexOf(k) === -1)
+    });
+    if (process.env.NODE_ENV !== 'production') {
+      // Print debug body trimmed to avoid logging large or binary data
+      console.log('Request body (debug):', JSON.stringify(debugBody, Object.keys(debugBody), 2));
+    }
+
+    // Normalize amount from several possible request fields (compatibility with different clients)
+    const amountCandidates = {
+      amount: req.body.amount,
+      amt: req.body.amt,
+      value: req.body.value,
+      quantity: req.body.quantity,
+      solAmount: req.body.solAmount || req.body.amountSol,
+      usdAmount: req.body.usdAmount || req.body.amountUSD,
+      tokens: req.body.tokens,
+    };
+    let rawAmount = null;
+    let amountSource = null;
+    for (const [k, v] of Object.entries(amountCandidates)) {
+      if (v !== undefined && v !== null && v !== '') {
+        rawAmount = v;
+        amountSource = k;
+        break;
+      }
+    }
+    // fallback: still accept the destructured variable 'amount' if present
+    if (rawAmount === null && amount !== undefined) {
+      rawAmount = amount;
+      amountSource = 'amount';
+    }
+    console.log('Amount candidate used:', { amountSource, rawAmount });
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Amount candidates:', amountCandidates);
+    }
 
     // Validações
     if (!carteiraUsuarioPublica || !carteiraUsuarioPrivada) {
@@ -87,31 +133,55 @@ router.post("/jupiter", async (req, res) => {
       });
     }
 
-    const numAmount = Number(amount);
-    if (isNaN(numAmount) || numAmount <= 0) {
+    const numAmount = Number(rawAmount);
+    if (rawAmount === null || rawAmount === undefined || isNaN(numAmount) || numAmount <= 0) {
       return res.status(400).json({ 
         success: false,
-        error: `Amount inválido: ${amount}` 
+        error: `Amount inválido ou ausente: ${rawAmount}. Envie 'amount' como número > 0 (ex: 0.01). Campos alternativos aceitos: amount, usdAmount, solAmount, amt, value, quantity.`,
+        received: rawAmount,
+        usedField: amountSource
       });
     }
 
     // Normalize direction to be case-insensitive and accept several common formats
-    function normalizeDirection(dir, from, to) {
+    function normalizeDirection(dir, from, to, body) {
       if (!dir && from && to) {
         dir = `${from}_TO_${to}`;
       }
       if (!dir || typeof dir !== 'string') return null;
-      const d = dir.trim().toUpperCase();
+      // Normalize common symbol names and separators
+      let d = dir.trim().toUpperCase();
+      // Map common synonyms
+      d = d.replace(/SOLANA/g, 'SOL');
+      // Map plain 'USD' to 'USDC' only when it's a standalone word, avoid touching 'USDT', 'USDC', etc.
+      d = d.replace(/\bUSD\b/g, 'USDC');
       const cleaned = d.replace(/[^A-Z0-9]/g, '_').replace(/_+/g, '_');
       if (cleaned.includes('SOL') && cleaned.includes('USDC')) {
         return cleaned.indexOf('SOL') < cleaned.indexOf('USDC') ? 'SOL_TO_USDC' : 'USDC_TO_SOL';
       }
+      // Try to infer by mints present in the body
+      const fromMintCandidates = [body?.fromMint, body?.inputMint, body?.from_mint, body?.input_mint];
+      const toMintCandidates = [body?.toMint, body?.outputMint, body?.to_mint, body?.output_mint];
+      const allMints = [...fromMintCandidates, ...toMintCandidates].filter(Boolean);
+      if (allMints.length) {
+        const hasSol = allMints.some(m => (m || '').toString() === SOL_MINT);
+        const hasUsdc = allMints.some(m => (m || '').toString() === USDC_MINT);
+        if (hasSol && hasUsdc) {
+          // If fromMint equals SOL_MINT or inputMint equals SOL -> SOL_TO_USDC
+          const fromMint = (fromMintCandidates.find(Boolean) || '').toString();
+          if (fromMint === SOL_MINT) return 'SOL_TO_USDC';
+          if (fromMint === USDC_MINT) return 'USDC_TO_SOL';
+          // fallback: check ordering in the body
+          return (from && from.toUpperCase && from.toUpperCase().includes('SOL')) ? 'SOL_TO_USDC' : 'USDC_TO_SOL';
+        }
+      }
       return null;
     }
 
-    const normalizedDirection = normalizeDirection(direction, req.body.from, req.body.to);
+    const normalizedDirection = normalizeDirection(direction, req.body.from, req.body.to, req.body);
     console.log("Normalized direction computed:", normalizedDirection);
-    if (!normalizedDirection) {
+    const hasMints = !!(req.body.inputMint && req.body.outputMint);
+    if (!normalizedDirection && !hasMints) {
       return res.status(400).json({ 
         success: false,
         error: "Direction inválida. Envie 'direction' como 'SOL_TO_USDC' ou 'USDC_TO_SOL' (aceita formas como 'SOL-USDC', 'sol->usdc', 'sol_usdc' etc.), ou envie 'from' e 'to' (e.g. from: 'SOL', to: 'USDC').",
@@ -123,24 +193,65 @@ router.post("/jupiter", async (req, res) => {
 
     let inputMint, outputMint, amountInSmallestUnits;
     let inputSymbol, outputSymbol;
+    let inputDecimals = 9;
+    let outputDecimals = 9;
 
-    if (canonicalDirection === "SOL_TO_USDC") {
+    // Helper to get decimals for known mints; fallback to 9
+    function getDecimalsForMint(mint) {
+      if (!mint) return 9;
+      if (mint === SOL_MINT) return 9;
+      if (mint === USDC_MINT) return 6;
+      // Extend if you add other known mints: e.g. VEIL_MINT: 9
+      return 9; // default
+    }
+
+    // If inputMint/outputMint are explicitly provided by the client, use them
+    if (req.body.inputMint && req.body.outputMint) {
+      inputMint = req.body.inputMint;
+      outputMint = req.body.outputMint;
+      inputDecimals = getDecimalsForMint(inputMint);
+      outputDecimals = getDecimalsForMint(outputMint);
+      // Determine if client sent amount in smallest units already
+      if (req.body.amountInSmallestUnits) {
+        amountInSmallestUnits = Number(req.body.amountInSmallestUnits);
+        console.log('Using amountInSmallestUnits from request:', amountInSmallestUnits);
+      } else if (Number.isInteger(Number(rawAmount)) && Number(rawAmount) >= Math.pow(10, Math.min(6, inputDecimals))) {
+        // heuristic: if an integer and >= 10^min(6,inputDecimals), treat as smallest units
+        amountInSmallestUnits = Number(rawAmount);
+        console.log('Heuristic: treating raw amount as smallest units:', amountInSmallestUnits);
+      } else {
+        amountInSmallestUnits = Math.floor(numAmount * Math.pow(10, inputDecimals));
+        console.log('Computed amountInSmallestUnits from UI amount:', amountInSmallestUnits);
+      }
+      // symbols: try to use provided from/to symbol fields, fall back to SOL/USDC mapping
+      inputSymbol = req.body.from || req.body.fromSymbol || (inputMint === SOL_MINT ? 'SOL' : inputMint === USDC_MINT ? 'USDC' : 'TOKEN');
+      outputSymbol = req.body.to || req.body.toSymbol || (outputMint === SOL_MINT ? 'SOL' : outputMint === USDC_MINT ? 'USDC' : 'TOKEN');
+      // derive a canonical direction string purely for logging
+      if (inputMint === SOL_MINT && outputMint === USDC_MINT) {
+        // Keep backward-compatible canonical value
+        // canonicalDirection already exists, but it's OK to keep it unchanged
+      }
+    } else if (canonicalDirection === "SOL_TO_USDC") {
       inputMint = SOL_MINT;
       outputMint = USDC_MINT;
+      inputDecimals = 9;
+      outputDecimals = 6;
       amountInSmallestUnits = Math.floor(numAmount * 1e9);
       inputSymbol = "SOL";
       outputSymbol = "USDC";
     } else {
       inputMint = USDC_MINT;
       outputMint = SOL_MINT;
+      inputDecimals = 6;
+      outputDecimals = 9;
       amountInSmallestUnits = Math.floor(numAmount * 1e6);
       inputSymbol = "USDC";
       outputSymbol = "SOL";
     }
 
     console.log(`Swap config: ${numAmount} ${inputSymbol} -> ${outputSymbol}`);
-    console.log(`Input mint: ${inputMint}`);
-    console.log(`Output mint: ${outputMint}`);
+    console.log(`Input mint: ${inputMint} (decimals: ${inputDecimals})`);
+    console.log(`Output mint: ${outputMint} (decimals: ${outputDecimals})`);
     console.log(`Amount in smallest units: ${amountInSmallestUnits}`);
 
     // 1. OBTER QUOTE
@@ -264,15 +375,13 @@ router.post("/jupiter", async (req, res) => {
     }, 1000);
 
     // 4. RETORNAR RESULTADO
-    const outputAmount = canonicalDirection === "USDC_TO_SOL" 
-      ? (quoteData.outAmount / 1e9).toFixed(6) + " SOL"
-      : (quoteData.outAmount / 1e6).toFixed(2) + " USDC";
+    const outputAmount = (quoteData.outAmount / Math.pow(10, outputDecimals)).toFixed(outputDecimals === 9 ? 6 : 2) + ` ${outputSymbol}`;
 
     const result = {
       success: true,
       signature,
-      direction: canonicalDirection,
-      inputAmount: `${amount} ${inputSymbol}`,
+      direction: canonicalDirection || `${inputSymbol}_TO_${outputSymbol}`,
+      inputAmount: `${rawAmount} ${inputSymbol}`,
       outputAmount: outputAmount,
       explorerUrl: `https://solscan.io/tx/${signature}`,
       message: "Swap iniciado com sucesso!",
