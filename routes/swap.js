@@ -1,5 +1,5 @@
 // ========================================================
-//  Jupiter Swap (API Atualizada) - COM MINT CORRETO
+//  Jupiter Swap (API Atualizada) - COM MELHOR TRATAMENTO DE ERROS
 // ========================================================
 const express = require("express");
 const router = express.Router();
@@ -12,37 +12,58 @@ const {
 const bs58 = require("bs58");
 const fetch = require("node-fetch");
 
-// Conexão RPC (recomendo usar uma RPC rápida)
+// Conexão RPC
 const connection = new Connection(
-  "https://solana-mainnet.g.alchemy.com/v2/demo", // Use sua própria ou alchemy
+  "https://api.mainnet-beta.solana.com",
   "confirmed"
 );
 
-// Mints CORRETOS para Solana Mainnet
+// Mints
 const SOL_MINT = "So11111111111111111111111111111111111111112";
-const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // ← USDC CORRETO
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
-// ========================================================
-//  Parse da chave privada
-// ========================================================
+// Timeout para requisições (em milissegundos)
+const REQUEST_TIMEOUT = 30000;
+
+// Função para fetch com timeout
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        ...options.headers,
+      },
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error(`Request timeout after ${REQUEST_TIMEOUT}ms`);
+    }
+    throw error;
+  }
+}
+
+// Parse da chave privada
 function parsePrivateKey(secretKey) {
   try {
-    // Se for string JSON array
     if (secretKey.startsWith("[")) {
       const arr = JSON.parse(secretKey);
       return Keypair.fromSecretKey(new Uint8Array(arr));
     }
-    // Se for base58 (como no seu exemplo)
     return Keypair.fromSecretKey(bs58.decode(secretKey));
   } catch (err) {
-    console.error("Erro ao parsear chave:", err.message);
     throw new Error(`Formato de chave inválido: ${err.message}`);
   }
 }
 
-// ========================================================
-//  SWAP via Jupiter API (funcional)
-// ========================================================
+// SWAP
 router.post("/jupiter", async (req, res) => {
   try {
     console.log("=== SWAP REQUEST ===", {
@@ -58,7 +79,7 @@ router.post("/jupiter", async (req, res) => {
       direction 
     } = req.body;
 
-    // Validações básicas
+    // Validações
     if (!carteiraUsuarioPublica || !carteiraUsuarioPrivada) {
       return res.status(400).json({ 
         success: false,
@@ -74,7 +95,6 @@ router.post("/jupiter", async (req, res) => {
       });
     }
 
-    // Verificar direction
     if (!["SOL_TO_USDC", "USDC_TO_SOL"].includes(direction)) {
       return res.status(400).json({ 
         success: false,
@@ -82,20 +102,19 @@ router.post("/jupiter", async (req, res) => {
       });
     }
 
-    // Configurar mints e converter amount
     let inputMint, outputMint, amountInSmallestUnits;
     let inputSymbol, outputSymbol;
 
     if (direction === "SOL_TO_USDC") {
       inputMint = SOL_MINT;
       outputMint = USDC_MINT;
-      amountInSmallestUnits = Math.floor(numAmount * 1e9); // SOL -> lamports
+      amountInSmallestUnits = Math.floor(numAmount * 1e9);
       inputSymbol = "SOL";
       outputSymbol = "USDC";
-    } else { // USDC_TO_SOL
+    } else {
       inputMint = USDC_MINT;
       outputMint = SOL_MINT;
-      amountInSmallestUnits = Math.floor(numAmount * 1e6); // USDC -> micro USDC
+      amountInSmallestUnits = Math.floor(numAmount * 1e6);
       inputSymbol = "USDC";
       outputSymbol = "SOL";
     }
@@ -105,24 +124,28 @@ router.post("/jupiter", async (req, res) => {
     console.log(`Output mint: ${outputMint}`);
     console.log(`Amount in smallest units: ${amountInSmallestUnits}`);
 
-    // ========================================================
     // 1. OBTER QUOTE
-    // ========================================================
     const quoteUrl = `https://quote-api.jup.ag/v6/quote` +
       `?inputMint=${inputMint}` +
       `&outputMint=${outputMint}` +
       `&amount=${amountInSmallestUnits}` +
-      `&slippageBps=100` + // 1% slippage
+      `&slippageBps=100` +
       `&onlyDirectRoutes=false` +
       `&maxAccounts=20`;
 
     console.log("Fetching quote from Jupiter...");
     
-    const quoteResponse = await fetch(quoteUrl, {
-      headers: {
-        'Accept': 'application/json'
-      }
-    });
+    let quoteResponse;
+    try {
+      quoteResponse = await fetchWithTimeout(quoteUrl);
+    } catch (fetchError) {
+      console.error("Erro ao buscar quote:", fetchError);
+      return res.status(500).json({
+        success: false,
+        error: `Não foi possível conectar à Jupiter API. Verifique a conectividade de rede do servidor.`,
+        details: fetchError.message
+      });
+    }
     
     const quoteData = await quoteResponse.json();
 
@@ -149,16 +172,13 @@ router.post("/jupiter", async (req, res) => {
       priceImpact: quoteData.priceImpactPct
     });
 
-    // ========================================================
     // 2. OBTER TRANSACTION
-    // ========================================================
     console.log("Obtendo transação...");
     
-    const swapResponse = await fetch("https://quote-api.jup.ag/v6/swap", {
+    const swapResponse = await fetchWithTimeout("https://quote-api.jup.ag/v6/swap", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Accept": "application/json"
       },
       body: JSON.stringify({
         quoteResponse: quoteData,
@@ -194,27 +214,16 @@ router.post("/jupiter", async (req, res) => {
       });
     }
 
-    // ========================================================
     // 3. ASSINAR E ENVIAR
-    // ========================================================
     console.log("Assinando transação...");
     
     const userKeypair = parsePrivateKey(carteiraUsuarioPrivada);
     
-    // Verificar se a public key corresponde
-    const userPubkey = userKeypair.publicKey.toBase58();
-    if (userPubkey !== carteiraUsuarioPublica) {
-      console.warn(`Public key mismatch: ${userPubkey} != ${carteiraUsuarioPublica}`);
-    }
-
-    // Deserializar transação
     const swapTransactionBuf = Buffer.from(swapData.swapTransaction, "base64");
     const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
     
-    // Assinar
     transaction.sign([userKeypair]);
 
-    // Enviar transação
     console.log("Enviando transação...");
     const rawTransaction = transaction.serialize();
     const signature = await connection.sendRawTransaction(rawTransaction, {
@@ -225,7 +234,7 @@ router.post("/jupiter", async (req, res) => {
 
     console.log("Transação enviada. Assinatura:", signature);
 
-    // Aguardar confirmação (não bloqueante)
+    // Aguardar confirmação (assíncrono)
     setTimeout(async () => {
       try {
         const confirmation = await connection.confirmTransaction(signature, "confirmed");
@@ -235,9 +244,7 @@ router.post("/jupiter", async (req, res) => {
       }
     }, 1000);
 
-    // ========================================================
     // 4. RETORNAR RESULTADO
-    // ========================================================
     const outputAmount = direction === "USDC_TO_SOL" 
       ? (quoteData.outAmount / 1e9).toFixed(6) + " SOL"
       : (quoteData.outAmount / 1e6).toFixed(2) + " USDC";
@@ -259,7 +266,6 @@ router.post("/jupiter", async (req, res) => {
   } catch (error) {
     console.error("ERRO NO SWAP:", error);
     
-    // Mensagem de erro amigável
     let errorMessage = "Erro ao processar swap";
     
     if (error.message.includes("insufficient funds")) {
@@ -270,6 +276,10 @@ router.post("/jupiter", async (req, res) => {
       errorMessage = "Erro na assinatura";
     } else if (error.message.includes("invalid secret key")) {
       errorMessage = "Chave privada inválida";
+    } else if (error.message.includes("Request timeout")) {
+      errorMessage = "Timeout ao conectar com a Jupiter. Tente novamente mais tarde.";
+    } else if (error.message.includes("ENOTFOUND") || error.message.includes("getaddrinfo")) {
+      errorMessage = "Erro de conexão. Verifique a rede do servidor.";
     }
 
     return res.status(500).json({
@@ -280,34 +290,31 @@ router.post("/jupiter", async (req, res) => {
   }
 });
 
-// ========================================================
-//  Rota para verificar tokens
-// ========================================================
-router.get("/tokens", async (req, res) => {
+// Health check com teste de conectividade com Jupiter
+router.get("/health", async (req, res) => {
   try {
-    const response = await fetch("https://token.jup.ag/all");
-    const tokens = await response.json();
+    // Tenta obter uma quote simples
+    const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${SOL_MINT}&outputMint=${USDC_MINT}&amount=10000000&slippageBps=50`;
     
-    // Filtrar tokens populares
-    const popularTokens = tokens.filter(t => 
-      t.symbol === "SOL" || 
-      t.symbol === "USDC" ||
-      t.symbol === "USDT"
-    );
-    
+    const quoteResponse = await fetchWithTimeout(quoteUrl);
+    const quoteData = await quoteResponse.json();
+
+    if (quoteData.error) {
+      throw new Error(quoteData.error);
+    }
+
     res.json({
-      success: true,
-      tokens: popularTokens.map(t => ({
-        symbol: t.symbol,
-        name: t.name,
-        mint: t.address,
-        decimals: t.decimals
-      }))
+      status: "healthy",
+      jupiterApi: "online",
+      solanaConnection: "connected",
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
+    console.error("Health check error:", error);
     res.status(500).json({
-      success: false,
-      error: error.message
+      status: "unhealthy",
+      error: error.message,
+      jupiterApi: "offline"
     });
   }
 });
